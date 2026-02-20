@@ -15,3 +15,17 @@ class BaseExtractor(ABC):
     @abstractmethod
     def fit_transform(self, epochs):
         pass
+
+class BaseSplitter(ABC):
+    @abstractmethod
+    def get_splits(self, x_data, y_labels, groups):
+        pass
+
+class BaseClassifier(ABC):
+    @abstractmethod
+    def train(self, x_train, y_train):
+        pass
+
+    @abstractmethod
+    def predict(self, x_test):
+        pass
