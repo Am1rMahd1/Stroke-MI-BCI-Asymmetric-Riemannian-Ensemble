@@ -1,8 +1,18 @@
+# config.py
+
 class Config:
     # Paths
     BASE_EDF_PATH = "/media/amirmahdi/NewVolume/edffile"
     EVENTS_FILE = "data/task-motor-imagery_events.csv"
-    OUTPUT_FILE = "data/processed/bci_features.npz"
+
+    # Active Pipeline Toggle
+    # Change this to 'CSP' or 'FBCSP' to automatically adjust the pipeline and filename
+    EXTRACTOR_TYPE = 'FBCSP'
+
+    @property
+    def OUTPUT_FILE(self):
+        """ Dynamically names the file: e.g., data/processed/features_FBCSP_4.0_45.0Hz.npz """
+        return f"data/processed/features_{self.EXTRACTOR_TYPE}_{self.L_FREQ}_{self.H_FREQ}Hz.npz"
 
     # Preprocessing
     FS_RESAMPLE = 250.0
