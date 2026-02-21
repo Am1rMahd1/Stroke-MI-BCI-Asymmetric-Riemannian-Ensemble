@@ -1,0 +1,5 @@
+outs:
+- md5: 66c83d5331b83653f59052539735a136
+  size: 171694
+  hash: md5
+  path: features_CSP_4.0_45.0Hz.npz
