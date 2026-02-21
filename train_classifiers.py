@@ -123,15 +123,15 @@ def main():
         # WeightedEnsembleClassifier(config),
         KNNClassifier(config),
         AutoTuningKNNClassifier(config),
-        AutoTuningXGBoostClassifier(config),
-        AutoTuningRandomForest(config),
+        # AutoTuningXGBoostClassifier(config),
+        # AutoTuningRandomForest(config),
         AutoTuningLogisticRegression(config),
 
     ]
 
     # 3. Execute Intra-Subject Phase
     print("Running Intra-Subject (Stratified K-Fold with Shuffle)...")
-    evaluate_intra_subject(X, y, groups, models, IntraShuffleSplitter(config), "Intra_KFold_Shuffle with 12 csp components 120 hz resampling with FP1", config)
+    evaluate_intra_subject(X, y, groups, models, IntraKFoldSplitter(config), "Intra_KFold_Shuffle with 12 csp components 120 hz resampling with FP1", config)
 
     # 4. Execute Inter-Subject Phase
     print("Running Inter-Subject (Leave-One-Subject-Out)...")
