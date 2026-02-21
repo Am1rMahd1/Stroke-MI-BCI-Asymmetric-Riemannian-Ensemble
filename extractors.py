@@ -16,7 +16,7 @@ class CSPExtractor(BaseExtractor):
         x_epochs = x_epochs[mask]
         y = y[mask]
 
-        csp = CSP(n_components=self.config.N_COMPONENTS, reg=None, log=True, norm_trace=True, verbose=False)
+        csp = CSP(n_components=self.config.N_COMPONENTS, reg=None, log=True, norm_trace=True)
         x_csp = csp.fit_transform(x_epochs, y)
 
         return x_csp, y
