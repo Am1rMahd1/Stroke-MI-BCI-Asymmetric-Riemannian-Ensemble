@@ -1,0 +1,5 @@
+outs:
+- md5: 22cc46270f815961aea7045d440ef439
+  size: 902857
+  hash: md5
+  path: features_EA_FBCSP_4.0_45.0Hz.npz

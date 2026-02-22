@@ -3,7 +3,8 @@ import os
 import numpy as np
 from config import Config
 from data_loader import StrokeEEGPreprocessor, SubjectDataLoader
-from extractors import CSPExtractor, FBCSPExtractor
+from extractors import CSPExtractor, FBCSPExtractor, EAFBCSPExtractor
+
 
 def main():
     config = Config()
@@ -16,6 +17,8 @@ def main():
         extractor = FBCSPExtractor(config)
     elif config.EXTRACTOR_TYPE == 'CSP':
         extractor = CSPExtractor(config)
+    elif config.EXTRACTOR_TYPE == 'EA_FBCSP':
+        extractor = EAFBCSPExtractor(config)
     else:
         raise ValueError("Invalid EXTRACTOR_TYPE in config. Choose 'CSP' or 'FBCSP'.")
 
