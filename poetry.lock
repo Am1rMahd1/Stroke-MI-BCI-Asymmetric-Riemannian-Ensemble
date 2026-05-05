@@ -4575,6 +4575,34 @@ url = "https://mirror-pypi.runflare.com/simple"
 reference = "runflare"
 
 [[package]]
+name = "pyriemann"
+version = "0.11"
+description = "Machine learning for multivariate data with Riemannian geometry"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "pyriemann-0.11-py2.py3-none-any.whl", hash = "sha256:93f500ed57177cfad14db0d56162868a7b52a0d14d4193865a80c90bab42ae82"},
+    {file = "pyriemann-0.11.tar.gz", hash = "sha256:852294514032a61171915bf07a38331e5149f5acfdcbc88633451dae71e34a1a"},
+]
+
+[package.dependencies]
+joblib = "*"
+matplotlib = "*"
+numpy = ">=1.25.0"
+scikit-learn = ">=0.24"
+scipy = "*"
+
+[package.extras]
+docs = ["cffconvert", "furo", "ipython", "mne", "numpydoc", "pandas", "seaborn", "sphinx", "sphinx-copybutton", "sphinx-design", "sphinx-gallery"]
+tests = ["flake8", "pytest", "seaborn"]
+
+[package.source]
+type = "legacy"
+url = "https://mirror-pypi.runflare.com/simple"
+reference = "runflare"
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 description = "Extensions to the standard Python datetime module"
@@ -5915,4 +5943,4 @@ reference = "runflare"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "47f35fb1c72b71ce9335a0a304f8a3e57587dca9ad7d485eb91e7c4fb5c1c0ff"
+content-hash = "5bec027aea71de58e35ff565dc4c1e6d1cca8c34d6abf2decd8db17c290e8d7c"
