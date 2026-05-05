@@ -9,8 +9,12 @@ class IntraKFoldSplitter(BaseSplitter):
         return self.cv.split(X, y)
 
 class IntraShuffleSplitter(BaseSplitter):
-    def __init__(self, config):
-        self.cv = StratifiedShuffleSplit(n_splits=config.N_SPLITS, train_size=config.SHUFFLE_TRAIN_SIZE, random_state=config.RANDOM_STATE)
+    def __init__(self, n_splits, train_size, random_state):
+        self.cv = StratifiedShuffleSplit(
+            n_splits=n_splits,
+            train_size=train_size,
+            random_state=random_state
+        )
     def get_splits(self, X, y, groups=None):
         return self.cv.split(X, y)
 

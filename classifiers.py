@@ -20,8 +20,8 @@ class SVMClassifier(BaseClassifier):
     def predict(self, X): return self.model.predict(X)
 
 class LDAClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.model = LinearDiscriminantAnalysis(**config.LDA_PARAMS)
+    def __init__(self, parameters):
+        self.model = LinearDiscriminantAnalysis(**parameters)
     @property
     def name(self): return "LDA"
     def train(self, X, y): self.model.fit(X, y)
@@ -81,8 +81,8 @@ class WeightedEnsembleClassifier(BaseClassifier):
     def predict(self, X): return self.model.predict(X)
 
 class KNNClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.model = KNeighborsClassifier(**config.KNN_PARAMS)
+    def __init__(self, params):
+        self.model = KNeighborsClassifier(**params)
     @property
     def name(self): return "KNN"
     def train(self, X, y): self.model.fit(X, y)
@@ -113,13 +113,12 @@ class AutoTuningKNNClassifier(BaseClassifier):
 
 
 class AutoTuningLDAClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, grid):
         self.is_tuned = True
         self.base_model = LinearDiscriminantAnalysis()
         self.model = GridSearchCV(
             estimator=self.base_model,
-            param_grid=config.LDA_GRID,
+            param_grid=grid,
             cv=3,
             n_jobs=-1,
             verbose=0

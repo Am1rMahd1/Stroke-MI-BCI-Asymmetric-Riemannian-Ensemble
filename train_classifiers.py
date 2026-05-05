@@ -7,10 +7,12 @@ import mlflow
 from sklearn.metrics import accuracy_score, confusion_matrix
 from tqdm import tqdm
 
-from config import Config
 from classifiers import SVMClassifier, LDAClassifier, WeightedEnsembleClassifier, KNNClassifier, \
     AutoTuningSVMClassifier, AutoTuningLDAClassifier, AutoTuningKNNClassifier, AutoTuningXGBoostClassifier, \
     AutoTuningRandomForest, AutoTuningLogisticRegression
+from config.config import Config
+from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS
+from extractors import CSPExtractor, FBCSPExtractor
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter, InterLOSOSplitter, InterGroupKFoldSplitter
 
 def calculate_metrics(y_true, y_pred):
@@ -40,13 +42,14 @@ def calculate_metrics(y_true, y_pred):
         "kappa": custom_kappa
     }
 
-def evaluate_intra_subject(X_all, y_all, groups_all, classifiers, splitter, run_name, config):
+def evaluate_intra_subject(X_all, y_all, groups_all, extractor, classifiers, splitter, run_name):
     """ Calculates metrics per subject, logs global averages, and saves per-subject details as an artifact. """
 
     with mlflow.start_run(run_name=run_name):
 
         mlflow.log_param("evaluation_phase", "Intra-Subject")
         mlflow.log_param("validation_strategy", type(splitter).__name__)
+        mlflow.log_param("feature_extractor", extractor.name)
 
         for clf in classifiers:
             with mlflow.start_run(run_name=clf.name, nested=True):
@@ -66,9 +69,21 @@ def evaluate_intra_subject(X_all, y_all, groups_all, classifiers, splitter, run_
                     fold_metrics = { "accuracy": [], "precision": [], "sensitivity": [], "kappa": [] }
 
                     for train_idx, test_idx in splitter.get_splits(X_sub, y_sub):
-                        clf.train(X_sub[train_idx], y_sub[train_idx])
-                        y_pred = clf.predict(X_sub[test_idx])
-                        metrics = calculate_metrics(y_sub[test_idx], y_pred)
+                        X_train_raw, y_train = X_sub[train_idx], y_sub[train_idx]
+                        X_test_raw, y_test = X_sub[test_idx], y_sub[test_idx]
+
+                        # 1. Fit extractor ONLY on training data
+                        extractor.fit(X_train_raw, y_train)
+
+                        # 2. Transform both train and test data
+                        X_train_features = extractor.transform(X_train_raw)
+                        X_test_features = extractor.transform(X_test_raw)
+
+                        # 3. Train classifier on features and predict
+                        clf.train(X_train_features, y_train)
+                        y_pred = clf.predict(X_test_features)
+
+                        metrics = calculate_metrics(y_test, y_pred)
 
                         for k, v in metrics.items(): fold_metrics[k].append(v)
 
@@ -95,7 +110,7 @@ def evaluate_intra_subject(X_all, y_all, groups_all, classifiers, splitter, run_
                 mlflow.log_artifact(csv_filename)
                 if os.path.exists(csv_filename): os.remove(csv_filename)
 
-def evaluate_inter_subject(X_all, y_all, groups_all, classifiers, splitter, run_name, config):
+def evaluate_inter_subject(X_all, y_all, groups_all, classifiers, splitter, run_name):
     """ Calculates metrics globally across the Inter-subject folds (LOSO / GroupKFold). """
 
     with mlflow.start_run(run_name=run_name):
@@ -124,18 +139,26 @@ def evaluate_inter_subject(X_all, y_all, groups_all, classifiers, splitter, run_
                     mlflow.log_metric(f"std_{k}", np.std(v)) # اضافه شدن انحراف معیار برای جدول مقاله
 
 
-def run_phase1_ablation(base_config):
+def run_phase1_ablation():
     print("\n" + "="*50 + "\n🚀 PHASE 1: ABLATION STUDY (Table I)\n" + "="*50)
 
-    dataset_files = glob.glob("data/processed/features_*.npz")
+    dataset_files = glob.glob("data/processed/dataset_*.npz")
 
     if not dataset_files:
         print("❌ No dataset files found. Run generate_features.py first.")
         return
 
-    base_lda = LDAClassifier(base_config)
-    auto_tuned_lda = AutoTuningLDAClassifier(base_config)
-    cv_splitter = IntraShuffleSplitter(base_config)
+    classifiers = [
+        KNNClassifier(KNN_PARAMS),
+        # LDAClassifier(LDA_PARAMS),
+        # AutoTuningLDAClassifier(LDA_GRID)
+    ]
+
+    cv_splitter = IntraShuffleSplitter(
+        n_splits=config.N_SPLITS,
+        train_size=config.SHUFFLE_TRAIN_SIZE,
+        random_state=config.RANDOM_STATE
+    )
 
     for file_path in dataset_files:
         file_name = os.path.basename(file_path).replace(".npz", "")
@@ -147,15 +170,38 @@ def run_phase1_ablation(base_config):
 
         data = np.load(file_path)
 
-        evaluate_intra_subject(
-            data['x_data'],
-            data['y_labels'],
-            data['groups'],
-            [base_lda, auto_tuned_lda],
-            cv_splitter,
-            f"Abl_{file_name}",
-            base_config,
-        )
+        X_all = data['x_data']
+        y_all = data['y_labels']
+        groups_all = data['groups']
+        sfreq = data['samplingFreq']
+
+        extractors = {
+            # "CSP": CSPExtractor(
+            #     numberOfComponents=config.N_COMPONENTS,
+            #     regularization=None
+            # ),
+            "FBCSP": FBCSPExtractor(
+                sfreq=sfreq,
+                freq_bands=config.FREQ_BANDS,
+                numberOfComponents=config.N_COMPONENTS,
+                regularization=None,
+            )
+        }
+
+        for ext_name, extractor in extractors.items():
+            print(f"  --> Using Extractor: {ext_name}")
+            run_name = f"Abl_{file_name}_{ext_name}"
+
+            evaluate_intra_subject(
+                X_all=X_all,
+                y_all=y_all,
+                groups_all=groups_all,
+                extractor=extractor,
+                classifiers=classifiers,
+                splitter=cv_splitter,
+                run_name=run_name,
+            )
+
 def get_golden_data(best_dataset_name):
     data = np.load(f"data/processed/{best_dataset_name}.npz")
     return data['x_data'], data['y_labels'], data['groups']
@@ -207,10 +253,10 @@ if __name__ == "__main__":
     mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
     mlflow.set_experiment(config.EXPERIMENT_NAME)
 
-    run_phase1_ablation(config)
+    run_phase1_ablation()
 
-    run_phase2_intra_models('features_FBCSP_IIR-4.0-45.0_Ref-Cz_Res-128.0_Reg-None')
+    # run_phase2_intra_models('features_FBCSP_IIR-4.0-45.0_Ref-Cz_Res-128.0_Reg-None')
 
-    run_phase3_inter_models(config)
+    # run_phase3_inter_models(config)
 
     print("\n✅ All evaluations complete. Run 'mlflow ui' to view your publication-ready results!")

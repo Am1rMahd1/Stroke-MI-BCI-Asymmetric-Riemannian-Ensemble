@@ -6,6 +6,9 @@ class Config:
     EVENTS_FILE = "data/task-motor-imagery_events.csv"
     PROCESSED_DATA_DIR='data/processed/'
 
+    N_SPLITS=10
+    SHUFFLE_TRAIN_SIZE=0.6
+
     # Preprocessing
 
     DROP_CHANNELS = ['']

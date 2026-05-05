@@ -1,11 +1,7 @@
 import os
 import numpy as np
-
 from config.config import Config
-from config.utils import OUTPUT_FILE
 from data_loader import StrokeEEGPreprocessor, SubjectDataLoader
-from extractors import CSPExtractor, FBCSPExtractor
-import copy
 
 
 def generate_and_save_dataset(step_config):
@@ -37,7 +33,7 @@ def generate_and_save_dataset(step_config):
         print(f"Dataset already exists at {output_path}. Skipping.")
         return output_path
 
-    for subject_id in range(1, 51):
+    for subject_id in range(1, 6):
         # 1. (Filtering, Resampling, Referencing)
         epochs = loader.load_subject_data(subject_id)
         y_labels = epochs.events[:, -1]
@@ -59,6 +55,7 @@ def generate_and_save_dataset(step_config):
         x_data=np.vstack(all_x),
         y_labels=np.concatenate(all_y),
         groups=np.concatenate(all_groups),
+        samplingFreq=step_config["resample"],
     )
     return output_path
 
@@ -70,57 +67,57 @@ if __name__ == "__main__":
         #     "name": "1",
         #     "filter": None,
         #     "ref": [],
-        #     "resample": None,
+        #     "resample": 500,
         #     # "reg": None
         # },
-        {
-            "step": 2,
-            "name": "2",
-            "filter": {
-                "filter_l_freq": 4.0,
-                "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=2, ftype='butter'),
-            },
-            "ref": [],
-            "resample": None,
-            # "reg": None
-        },
-        {
-            "step": 3,
-            "name": "3",
-            "filter": {
-                "filter_l_freq": 4.0,
-                "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=2, ftype='butter'),
-            },
-            "ref": 'average',
-            "resample": None,
-            # "reg": None
-        },
-        {
-            "step": 4,
-            "name": "4",
-            "filter": {
-                "filter_l_freq": 4.0,
-                "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=2, ftype='butter'),
-            },
-            "ref": ['Cz'],
-            "resample": None,
-            # "reg": None
-        },
-        {
-            "step": 5,
-            "name": "5",
-            "filter": {
-                "filter_l_freq": 4.0,
-                "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=2, ftype='butter'),
-            },
-            "ref": ['Cz'],
-            "resample": 128.0,
-            # "reg": None
-        },
+        # {
+        #     "step": 2,
+        #     "name": "2",
+        #     "filter": {
+        #         "filter_l_freq": 4.0,
+        #         "filter_h_freq": 45.0,
+        #         "filter_iir_params": dict(order=2, ftype='butter'),
+        #     },
+        #     "ref": [],
+        #     "resample": 500,
+        #     # "reg": None
+        # },
+        # {
+        #     "step": 3,
+        #     "name": "3",
+        #     "filter": {
+        #         "filter_l_freq": 4.0,
+        #         "filter_h_freq": 45.0,
+        #         "filter_iir_params": dict(order=2, ftype='butter'),
+        #     },
+        #     "ref": 'average',
+        #     "resample": 500,
+        #     # "reg": None
+        # },
+        # {
+        #     "step": 4,
+        #     "name": "4",
+        #     "filter": {
+        #         "filter_l_freq": 4.0,
+        #         "filter_h_freq": 45.0,
+        #         "filter_iir_params": dict(order=2, ftype='butter'),
+        #     },
+        #     "ref": ['Cz'],
+        #     "resample": 500,
+        #     # "reg": None
+        # },
+        # {
+        #     "step": 5,
+        #     "name": "5",
+        #     "filter": {
+        #         "filter_l_freq": 4.0,
+        #         "filter_h_freq": 45.0,
+        #         "filter_iir_params": dict(order=2, ftype='butter'),
+        #     },
+        #     "ref": ['Cz'],
+        #     "resample": 128.0,
+        #     # "reg": None
+        # },
         {
             "step": 6,
             "name": "6",

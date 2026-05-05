@@ -6,89 +6,92 @@ from scipy.linalg import fractional_matrix_power
 
 from interfaces import BaseExtractor
 
-class CSPExtractor(BaseExtractor):
-    def __init__(self, targetClasses, numberOfComponents, cspRegularization):
-        self.targetClasses = targetClasses
-        self.numberOfComponents = numberOfComponents
-        self.cspRegularization = cspRegularization
-        self.csp_model = None
-
-    def _get_clean_data(self, epochs):
-        y = epochs.events[:, -1]
-        mask = np.isin(y, self.targetClasses)
-        return epochs.get_data(copy=False)[mask], y[mask]
-
-    def fit(self, epochs):
-        x_raw, y = self._get_clean_data(epochs)
-
-        self.csp_model = CSP(
-            n_components=self.numberOfComponents,
-            reg=self.cspRegularization,
+class CSPExtractor:
+    def __init__(self, numberOfComponents, regularization):
+        """
+        Standard Common Spatial Pattern (CSP) extractor for NumPy arrays.
+        """
+        self.name="CSP"
+        self.csp = CSP(
+            n_components=numberOfComponents,
+            reg=regularization,
             log=True,
             norm_trace=True
         )
 
-        self.csp_model.fit(x_raw, y)
+    def fit(self, X, y):
+        """
+        Fits the CSP on the training data.
+        X shape: (n_epochs, n_channels, n_times)
+        y shape: (n_epochs,)
+        """
+        self.csp.fit(X, y)
         return self
 
-    def transform(self, epochs):
-        if self.csp_model is None:
-            raise RuntimeError("Call the fit method first.")
+    def transform(self, X):
+        """
+        Extracts features from the data.
+        """
+        return self.csp.transform(X)
 
-        x_raw, y = self._get_clean_data(epochs)
+class FBCSPExtractor:
+    def __init__(self, sfreq, freq_bands, numberOfComponents, regularization):
+        """
+        Filter Bank Common Spatial Pattern (FBCSP) extractor for NumPy arrays.
+        sfreq: Float, sampling frequency of the data (loaded from your .npz file)
+        freq_bands: List of tuples, e.g., [(4, 8), (8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)]
+        """
+        self.name="FBCSP"
+        self.sfreq = sfreq
+        self.freq_bands = freq_bands
+        self.n_components = numberOfComponents
 
-        x_csp = self.csp_model.transform(x_raw)
-
-        return x_csp, y
-
-
-class FBCSPExtractor(BaseExtractor):
-    def __init__(self, targetClasses, freqBands, numberOfComponents, cspRegularization):
-        self.targetClasses = targetClasses
-        self.freqBands = freqBands
-        self.numberOfComponents = numberOfComponents
-        self.cspRegularization = cspRegularization
-        self.csp_models = {}
-
-    def _get_clean_data(self, epochs):
-        y = epochs.events[:, -1]
-        mask = np.isin(y, self.targetClasses)
-        return epochs.get_data(copy=False)[mask], y[mask], epochs.info['sfreq']
-
-    def fit(self, epochs):
-        x_raw, y, sfreq = self._get_clean_data(epochs)
-
-        for band_name, (l_freq, h_freq) in self.freqBands.items():
-            x_band = mne.filter.filter_data(
-                x_raw, sfreq, l_freq, h_freq, verbose=False
-            )
-
-            csp = CSP(
-                n_components=self.numberOfComponents,
-                reg=self.cspRegularization,
+        # Initialize a separate CSP for each frequency band
+        self.csps = [
+            CSP(
+                n_components=numberOfComponents,
+                reg=regularization,
                 log=True,
-                norm_trace=True
+                norm_trace=True,
             )
-            csp.fit(x_band, y)
+            for _ in freq_bands
+        ]
 
-            self.csp_models[band_name] = csp
+    def _filter_data(self, X):
+        """
+        Filters the input array X into multiple frequency bands.
+        """
+        filtered_X = []
+        for l_freq, h_freq in self.freq_bands.values():
+            # mne.filter.filter_data handles NumPy arrays perfectly
+            X_band = mne.filter.filter_data(
+                X,
+                sfreq=self.sfreq,
+                l_freq=l_freq,
+                h_freq=h_freq,
+                verbose=False
+            )
+            filtered_X.append(X_band)
+        return filtered_X
 
+    def fit(self, X, y):
+        """
+        Filters data into bands and fits a CSP model for each band.
+        """
+        filtered_X = self._filter_data(X)
+        for i, X_band in enumerate(filtered_X):
+            self.csps[i].fit(X_band, y)
         return self
 
-    def transform(self, epochs):
-        x_raw, y, sfreq = self._get_clean_data(epochs)
-        x_fbcsp = []
+    def transform(self, X):
+        """
+        Filters data, applies the fitted CSPs, and concatenates the features.
+        """
+        filtered_X = self._filter_data(X)
+        features = []
+        for i, X_band in enumerate(filtered_X):
+            band_features = self.csps[i].transform(X_band)
+            features.append(band_features)
 
-        for band_name, (l_freq, h_freq) in self.freqBands.items():
-            x_band = mne.filter.filter_data(
-                x_raw, sfreq, l_freq, h_freq, verbose=False
-            )
-
-            if band_name in self.csp_models:
-                x_band_csp = self.csp_models[band_name].transform(x_band)
-                x_fbcsp.append(x_band_csp)
-            else:
-                raise RuntimeError(f"CSP model is has not been fitted for the band {band_name} .")
-
-        x_fbcsp_concatenated = np.hstack(x_fbcsp)
-        return x_fbcsp_concatenated, y
+        # Concatenate features horizontally (combining all bands for each epoch)
+        return np.hstack(features)

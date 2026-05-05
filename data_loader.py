@@ -96,7 +96,7 @@ class SubjectDataLoader(BaseLoader):
             verbose=False,
         )
 
-        if self.resmapleFreq is not None:
+        if self.resmapleFreq != 500:
             epochs.resample(self.resmapleFreq, verbose=False)
         return epochs
 
