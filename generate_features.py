@@ -1,22 +1,20 @@
 import os
 import numpy as np
-from config import Config
 from data_loader import StrokeEEGPreprocessor, SubjectDataLoader
-from extractors import CSPExtractor, FBCSPExtractor, EAFBCSPExtractor
+from extractors import CSPExtractor, FBCSPExtractor
+import copy
 
-def generate_and_save_dataset(config):
-    preprocessor = StrokeEEGPreprocessor(config)
-    loader = SubjectDataLoader(config, preprocessor)
 
-    # Dynamically select the extractor based on config
+def generate_and_save_dataset():
+    preprocessor = StrokeEEGPreprocessor()
+    loader = SubjectDataLoader(preprocessor=preprocessor)
+
     if config.EXTRACTOR_TYPE == 'FBCSP':
         extractor = FBCSPExtractor(config)
     elif config.EXTRACTOR_TYPE == 'CSP':
         extractor = CSPExtractor(config)
-    elif config.EXTRACTOR_TYPE == 'EA_FBCSP':
-        extractor = EAFBCSPExtractor(config)
     else:
-        raise ValueError("Invalid EXTRACTOR_TYPE. Choose 'CSP', 'FBCSP' or 'EA_FBCSP'.")
+        raise ValueError("Invalid EXTRACTOR_TYPE. Choose 'CSP', 'FBCSP'.")
 
     all_x = []
     all_y = []
@@ -62,18 +60,62 @@ def generate_and_save_dataset(config):
     return output_path
 
 if __name__ == "__main__":
-    import copy
-
-    base_config = Config()
 
     ablation_steps = [
-        {"step": 1, "name": "1_Raw",       "iir": False,  "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
-        {"step": 2, "name": "2_IIR",       "iir": True,   "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
-        {"step": 3, "name": "3_RefCAR",    "iir": True,   "ref": 'average', "resample": False, "ext": "CSP",      "reg": None}, # حالت جدید!
-        {"step": 4, "name": "4_RefCz",     "iir": True,   "ref": ['Cz'],    "resample": False, "ext": "CSP",      "reg": None}, # ارتقا به CAR
-        {"step": 5, "name": "5_Resample",  "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "CSP",      "reg": None},
-        {"step": 6, "name": "6_FBCSP",     "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "FBCSP",    "reg": None},
-        {"step": 7, "name": "7_EAFBCSP",   "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "EA_FBCSP", "reg": "ledoit_wolf"},
+        {
+            "step": 1,
+            "name": "1_Raw",
+            "iir": False,
+            "ref": None,
+            "resample": False,
+            "ext": "CSP",
+            "reg": None
+        },
+        {
+            "step": 2,
+            "name": "2_IIR",
+            "iir": True,
+            "ref": None,
+            "resample": False,
+            "ext": "CSP",
+            "reg": None
+        },
+        {
+            "step": 3,
+            "name": "3_RefCAR",
+            "iir": True,
+            "ref": 'average',
+            "resample": False,
+            "ext": "CSP",
+            "reg": None
+        },
+        {
+            "step": 4,
+            "name": "4_RefCz",
+            "iir": True,
+            "ref": ['Cz'],
+            "resample": False,
+            "ext": "CSP",
+            "reg": None
+        },
+        {
+            "step": 5,
+            "name": "5_Resample",
+            "iir": True,
+            "ref": ['Cz'],
+            "resample": True,
+            "ext": "CSP",
+            "reg": None
+        },
+        {
+            "step": 6,
+            "name": "6_FBCSP",
+            "iir": True,
+            "ref": ['Cz'],
+            "resample": True,
+            "ext": "FBCSP",
+            "reg": None
+        },
     ]
 
     print("🚀 Starting Automated Dataset Generation for Ablation Study...")
@@ -83,7 +125,6 @@ if __name__ == "__main__":
         print(f"▶️ Executing Step {condition['step']}: {condition['name']}")
         print(f"{'='*60}")
 
-        cfg = copy.deepcopy(base_config)
 
         cfg.L_FREQ = 4.0 if condition["iir"] else None
         cfg.H_FREQ = 45.0 if condition["iir"] else None
