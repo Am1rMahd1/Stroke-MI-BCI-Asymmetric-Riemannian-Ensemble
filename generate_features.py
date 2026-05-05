@@ -29,7 +29,7 @@ def generate_and_save_dataset(config):
         print(f"Dataset already exists at {output_path}. Skipping generation.")
         return output_path
 
-    for subject_id in range(1, 51):
+    for subject_id in range(1, 6):
         try:
             epochs = loader.load_subject_data(subject_id)
             x_features, y_labels = extractor.fit_transform(epochs)
@@ -67,13 +67,13 @@ if __name__ == "__main__":
     base_config = Config()
 
     ablation_steps = [
-        {"step": 1, "name": "1_Raw",       "iir": False,  "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
-        {"step": 2, "name": "2_IIR",       "iir": True,   "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
-        {"step": 3, "name": "3_RefCAR",    "iir": True,   "ref": 'average', "resample": False, "ext": "CSP",      "reg": None}, # حالت جدید!
-        {"step": 4, "name": "4_RefCz",     "iir": True,   "ref": ['Cz'],    "resample": False, "ext": "CSP",      "reg": None}, # ارتقا به CAR
-        {"step": 5, "name": "5_Resample",  "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "CSP",      "reg": None},
+        # {"step": 1, "name": "1_Raw",       "iir": False,  "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
+        # {"step": 2, "name": "2_IIR",       "iir": True,   "ref": None,      "resample": False, "ext": "CSP",      "reg": None},
+        # {"step": 3, "name": "3_RefCAR",    "iir": True,   "ref": 'average', "resample": False, "ext": "CSP",      "reg": None}, # حالت جدید!
+        # {"step": 4, "name": "4_RefCz",     "iir": True,   "ref": ['Cz'],    "resample": False, "ext": "CSP",      "reg": None}, # ارتقا به CAR
+        # {"step": 5, "name": "5_Resample",  "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "CSP",      "reg": None},
         {"step": 6, "name": "6_FBCSP",     "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "FBCSP",    "reg": None},
-        {"step": 7, "name": "7_EAFBCSP",   "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "EA_FBCSP", "reg": "ledoit_wolf"},
+        # {"step": 7, "name": "7_EAFBCSP",   "iir": True,   "ref": ['Cz'],    "resample": True,  "ext": "EA_FBCSP", "reg": "ledoit_wolf"},
     ]
 
     print("🚀 Starting Automated Dataset Generation for Ablation Study...")
