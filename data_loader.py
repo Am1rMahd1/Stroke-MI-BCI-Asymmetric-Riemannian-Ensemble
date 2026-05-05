@@ -31,10 +31,12 @@ class StrokeEEGPreprocessor(BasePreprocessor):
             verbose=False
         )
 
-        # raw.pick_channels(
-        #     ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
-        #     verbose=False
-        # )
+        raw.pick_channels(
+            # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
+            ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
+            # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
+            verbose=False
+        )
 
         # Dropping specific channels
         raw.drop_channels(

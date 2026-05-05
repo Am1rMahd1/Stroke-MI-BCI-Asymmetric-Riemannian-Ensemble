@@ -71,6 +71,8 @@ class FBCSPExtractor:
                 sfreq=self.sfreq,
                 l_freq=l_freq,
                 h_freq=h_freq,
+                iir_params=dict(order=4, ftype='butter'),
+                method='iir',
                 verbose=False
             )
             filtered_X.append(X_band)

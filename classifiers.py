@@ -92,13 +92,12 @@ class KNNClassifier(BaseClassifier):
     def predict(self, X): return self.model.predict(X)
 
 class AutoTuningKNNClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, grid):
         self.is_tuned = True
         self.base_model = KNeighborsClassifier()
         self.model = GridSearchCV(
             estimator=self.base_model,
-            param_grid=config.KNN_GRID,
+            param_grid=grid,
             cv=3,
             n_jobs=-1,
             verbose=0

@@ -11,7 +11,7 @@ from classifiers import SVMClassifier, LDAClassifier, WeightedEnsembleClassifier
     AutoTuningSVMClassifier, AutoTuningLDAClassifier, AutoTuningKNNClassifier, AutoTuningXGBoostClassifier, \
     AutoTuningRandomForest, AutoTuningLogisticRegression
 from config.config import Config
-from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS, SVM_PARAMS, SVM_GRID, LR_GRID
+from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS, SVM_PARAMS, SVM_GRID, LR_GRID, KNN_GRID
 from extractors import CSPExtractor, FBCSPExtractor, CSPAndVarianceExtractor, RiemannianExtractor
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter, InterLOSOSplitter, InterGroupKFoldSplitter
 
@@ -162,6 +162,7 @@ def run_phase1_ablation():
         # SVMClassifier(SVM_PARAMS)
         # AutoTuningSVMClassifier(SVM_GRID)
         # KNNClassifier(KNN_PARAMS),
+        # AutoTuningKNNClassifier(KNN_GRID),
         AutoTuningLogisticRegression(LR_GRID)
         # LDAClassifier(LDA_PARAMS),
         # AutoTuningLDAClassifier(LDA_GRID)

@@ -121,11 +121,7 @@ if __name__ == "__main__":
         {
             "step": 6,
             "name": "6",
-            "filter": {
-                "filter_l_freq": 4.0,
-                "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=4, ftype='butter'),
-            },
+            "filter": None,
             "ref": ['Cz'],
             "resample": 128.0,
             # "reg": None
