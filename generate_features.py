@@ -1,120 +1,137 @@
 import os
 import numpy as np
+
+from config.config import Config
+from config.utils import OUTPUT_FILE
 from data_loader import StrokeEEGPreprocessor, SubjectDataLoader
 from extractors import CSPExtractor, FBCSPExtractor
 import copy
 
 
-def generate_and_save_dataset():
-    preprocessor = StrokeEEGPreprocessor()
-    loader = SubjectDataLoader(preprocessor=preprocessor)
+def generate_and_save_dataset(step_config):
+    config = Config()
 
-    if config.EXTRACTOR_TYPE == 'FBCSP':
-        extractor = FBCSPExtractor(config)
-    elif config.EXTRACTOR_TYPE == 'CSP':
-        extractor = CSPExtractor(config)
-    else:
-        raise ValueError("Invalid EXTRACTOR_TYPE. Choose 'CSP', 'FBCSP'.")
+    preprocessor = StrokeEEGPreprocessor(
+        referenceChannels=step_config["ref"],
+        dropChannels=config.DROP_CHANNELS,
+        filter=step_config["filter"],
+        montageName=config.MONTAGE_NAME,
+    )
+    loader = SubjectDataLoader(
+        baseEdfFilesPath=config.BASE_EDF_PATH,
+        eventsFilePath=config.EVENTS_FILE,
+        preprocessor=preprocessor,
+        epochTMin=config.EPOCH_TMIN,
+        epochTMax=config.EPOCH_TMAX,
+        resmapleFreq=step_config["resample"],
+    )
 
     all_x = []
     all_y = []
     all_groups = []
 
-    print(f"\n--- Starting Extraction: {config.EXTRACTOR_TYPE} ---")
-    output_path = config.OUTPUT_FILE
+    output_filename = f"dataset_step_{step_config["name"]}.npz"
+    output_path = os.path.join(config.PROCESSED_DATA_DIR, output_filename)
 
     if os.path.exists(output_path):
-        print(f"Dataset already exists at {output_path}. Skipping generation.")
+        print(f"Dataset already exists at {output_path}. Skipping.")
         return output_path
 
     for subject_id in range(1, 51):
-        try:
-            epochs = loader.load_subject_data(subject_id)
-            x_features, y_labels = extractor.fit_transform(epochs)
+        # 1. (Filtering, Resampling, Referencing)
+        epochs = loader.load_subject_data(subject_id)
+        y_labels = epochs.events[:, -1]
+        mask = np.isin(y_labels, config.TARGET_CLASSES)
 
-            groups = np.full(len(y_labels), subject_id)
+        x_data = epochs.get_data(copy=False)[mask]
+        y_labels = y_labels[mask]
 
-            all_x.append(x_features)
-            all_y.append(y_labels)
-            all_groups.append(groups)
+        groups = np.full(len(y_labels), subject_id)
+        all_x.append(x_data)
+        all_y.append(y_labels)
+        all_groups.append(groups)
 
-            print(f"Processed Subject {subject_id}")
+        print(f"Processed Subject {subject_id} - Signal Shape: {x_data.shape}")
 
-        except FileNotFoundError:
-            print(f"Skipping Subject {subject_id} (Not found)")
-
-    x_stacked = np.vstack(all_x)
-    y_stacked = np.concatenate(all_y)
-    groups_stacked = np.concatenate(all_groups)
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
+    # ذخیره دیتاست (این بار سیگنال‌ها ذخیره می‌شوند نه ویژگی‌های نهایی)
     np.savez_compressed(
         output_path,
-        x_data=x_stacked,
-        y_labels=y_stacked,
-        groups=groups_stacked
+        x_data=np.vstack(all_x),
+        y_labels=np.concatenate(all_y),
+        groups=np.concatenate(all_groups),
     )
-    print(f"✅ Dataset securely saved to {output_path} with shape {x_stacked.shape}")
-
     return output_path
 
 if __name__ == "__main__":
 
     ablation_steps = [
-        {
-            "step": 1,
-            "name": "1_Raw",
-            "iir": False,
-            "ref": None,
-            "resample": False,
-            "ext": "CSP",
-            "reg": None
-        },
+        # {
+        #     "step": 1,
+        #     "name": "1",
+        #     "filter": None,
+        #     "ref": [],
+        #     "resample": None,
+        #     # "reg": None
+        # },
         {
             "step": 2,
-            "name": "2_IIR",
-            "iir": True,
-            "ref": None,
-            "resample": False,
-            "ext": "CSP",
-            "reg": None
+            "name": "2",
+            "filter": {
+                "filter_l_freq": 4.0,
+                "filter_h_freq": 45.0,
+                "filter_iir_params": dict(order=2, ftype='butter'),
+            },
+            "ref": [],
+            "resample": None,
+            # "reg": None
         },
         {
             "step": 3,
-            "name": "3_RefCAR",
-            "iir": True,
+            "name": "3",
+            "filter": {
+                "filter_l_freq": 4.0,
+                "filter_h_freq": 45.0,
+                "filter_iir_params": dict(order=2, ftype='butter'),
+            },
             "ref": 'average',
-            "resample": False,
-            "ext": "CSP",
-            "reg": None
+            "resample": None,
+            # "reg": None
         },
         {
             "step": 4,
-            "name": "4_RefCz",
-            "iir": True,
+            "name": "4",
+            "filter": {
+                "filter_l_freq": 4.0,
+                "filter_h_freq": 45.0,
+                "filter_iir_params": dict(order=2, ftype='butter'),
+            },
             "ref": ['Cz'],
-            "resample": False,
-            "ext": "CSP",
-            "reg": None
+            "resample": None,
+            # "reg": None
         },
         {
             "step": 5,
-            "name": "5_Resample",
-            "iir": True,
+            "name": "5",
+            "filter": {
+                "filter_l_freq": 4.0,
+                "filter_h_freq": 45.0,
+                "filter_iir_params": dict(order=2, ftype='butter'),
+            },
             "ref": ['Cz'],
-            "resample": True,
-            "ext": "CSP",
-            "reg": None
+            "resample": 128.0,
+            # "reg": None
         },
         {
             "step": 6,
-            "name": "6_FBCSP",
-            "iir": True,
+            "name": "6",
+            "filter": {
+                "filter_l_freq": 4.0,
+                "filter_h_freq": 45.0,
+                "filter_iir_params": dict(order=2, ftype='butter'),
+            },
             "ref": ['Cz'],
-            "resample": True,
-            "ext": "FBCSP",
-            "reg": None
+            "resample": 128.0,
+            # "reg": None
         },
     ]
 
@@ -125,19 +142,6 @@ if __name__ == "__main__":
         print(f"▶️ Executing Step {condition['step']}: {condition['name']}")
         print(f"{'='*60}")
 
-
-        cfg.L_FREQ = 4.0 if condition["iir"] else None
-        cfg.H_FREQ = 45.0 if condition["iir"] else None
-
-        cfg.REFERENCE_CHANNELS = condition["ref"] if condition["ref"] is not None else []
-        cfg.FS_RESAMPLE = 128.0 if condition["resample"] else None
-
-        cfg.EXTRACTOR_TYPE = condition["ext"]
-        cfg.CSP_REGULARIZATION = condition["reg"]
-
-        try:
-            generate_and_save_dataset(cfg)
-        except Exception as e:
-            print(f"❌ Error in Step {condition['step']}: {str(e)}")
+        generate_and_save_dataset(condition)
 
     print("\n🎉 All 7 datasets have been successfully generated and saved!")

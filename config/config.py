@@ -4,6 +4,7 @@ class Config:
     # Paths
     BASE_EDF_PATH = "/media/amirmahdi/NewVolume/edffile"
     EVENTS_FILE = "data/task-motor-imagery_events.csv"
+    PROCESSED_DATA_DIR='data/processed/'
 
     # Preprocessing
 
