@@ -8,12 +8,15 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
+
+from config.config import Config
 from interfaces import BaseClassifier
 
 
 class SVMClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.model = SVC(**config.SVM_PARAMS, random_state=config.RANDOM_STATE)
+    def __init__(self, params):
+        self.config = Config()
+        self.model = SVC(**params, random_state=self.config.RANDOM_STATE)
     @property
     def name(self): return "SVM"
     def train(self, X, y): self.model.fit(X, y)
@@ -28,21 +31,21 @@ class LDAClassifier(BaseClassifier):
     def predict(self, X): return self.model.predict(X)
 
 class AutoTuningSVMClassifier(BaseClassifier):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, grid):
+        self.config = Config()
         self.is_tuned = True
 
         # The base model establishes the safety nets: probabilities and balancing
         self.base_model = SVC(
             class_weight='balanced',
             probability=True,
-            random_state=config.RANDOM_STATE
+            random_state=self.config.RANDOM_STATE
         )
 
         # The GridSearch automatically finds the best C and Kernel internally
         self.model = GridSearchCV(
             estimator=self.base_model,
-            param_grid=config.SVM_GRID,
+            param_grid=grid,
             cv=3,          # 3-fold internal validation for speed
             n_jobs=-1,     # Use all your CPU cores
             verbose=0
@@ -191,8 +194,8 @@ class AutoTuningRandomForest(BaseClassifier):
 
 
 class AutoTuningLogisticRegression(BaseClassifier):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, grid):
+        self.config = Config()
         self.is_tuned = True
         # saga solver is required for ElasticNet penalty
         self.base_model = LogisticRegression(
@@ -200,11 +203,11 @@ class AutoTuningLogisticRegression(BaseClassifier):
             solver='saga',
             max_iter=5000,  # High iterations required for saga convergence
             class_weight='balanced',
-            random_state=config.RANDOM_STATE
+            random_state=self.config.RANDOM_STATE
         )
         self.model = GridSearchCV(
             estimator=self.base_model,
-            param_grid=config.LR_GRID,
+            param_grid=grid,
             cv=3,
             n_jobs=-1,
             verbose=0
