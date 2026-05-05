@@ -1,14 +1,15 @@
-# classifiers.py
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import VotingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.ensemble import VotingClassifier, AdaBoostClassifier
 from xgboost import XGBClassifier
-
 from interfaces import BaseClassifier
+
 
 class SVMClassifier(BaseClassifier):
     def __init__(self, config):
@@ -29,6 +30,7 @@ class LDAClassifier(BaseClassifier):
 class AutoTuningSVMClassifier(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
 
         # The base model establishes the safety nets: probabilities and balancing
         self.base_model = SVC(
@@ -89,6 +91,7 @@ class KNNClassifier(BaseClassifier):
 class AutoTuningKNNClassifier(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
         self.base_model = KNeighborsClassifier()
         self.model = GridSearchCV(
             estimator=self.base_model,
@@ -112,6 +115,7 @@ class AutoTuningKNNClassifier(BaseClassifier):
 class AutoTuningLDAClassifier(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
         self.base_model = LinearDiscriminantAnalysis()
         self.model = GridSearchCV(
             estimator=self.base_model,
@@ -135,6 +139,7 @@ class AutoTuningLDAClassifier(BaseClassifier):
 class AutoTuningXGBoostClassifier(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
         # eval_metric='logloss' prevents a deprecation warning in newer XGBoost versions
         self.base_model = XGBClassifier(
             eval_metric='logloss',
@@ -162,14 +167,10 @@ class AutoTuningXGBoostClassifier(BaseClassifier):
         raw_predictions = self.model.predict(X)
         return raw_predictions + 1
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import GridSearchCV
-from interfaces import BaseClassifier
-
 class AutoTuningRandomForest(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
         self.base_model = RandomForestClassifier(random_state=config.RANDOM_STATE)
         self.model = GridSearchCV(
             estimator=self.base_model,
@@ -193,6 +194,7 @@ class AutoTuningRandomForest(BaseClassifier):
 class AutoTuningLogisticRegression(BaseClassifier):
     def __init__(self, config):
         self.config = config
+        self.is_tuned = True
         # saga solver is required for ElasticNet penalty
         self.base_model = LogisticRegression(
             penalty='elasticnet',

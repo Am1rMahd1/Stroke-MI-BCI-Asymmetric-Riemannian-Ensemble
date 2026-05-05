@@ -18,7 +18,7 @@ class CSPExtractor(BaseExtractor):
         x_epochs = x_epochs[mask]
         y = y[mask]
 
-        csp = CSP(n_components=self.config.N_COMPONENTS, reg=None, log=True, norm_trace=True)
+        csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
         x_csp = csp.fit_transform(x_epochs, y)
 
         return x_csp, y
@@ -47,7 +47,7 @@ class FBCSPExtractor(BaseExtractor):
                 verbose=False,
             )
 
-            csp = CSP(n_components=self.config.N_COMPONENTS, reg=None, log=True, norm_trace=True)
+            csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
             x_band_csp = csp.fit_transform(x_band, y)
             x_fbcsp.append(x_band_csp)
 
@@ -101,7 +101,7 @@ class EAFBCSPExtractor(BaseExtractor):
             )
 
             # Keep ledoit_wolf here as well!
-            csp = CSP(n_components=self.config.N_COMPONENTS, reg='ledoit_wolf', log=True, norm_trace=True)
+            csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
             x_band_csp = csp.fit_transform(x_band, y)
             x_fbcsp.append(x_band_csp)
 

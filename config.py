@@ -11,8 +11,19 @@ class Config:
 
     @property
     def OUTPUT_FILE(self):
-        """ Dynamically names the file: e.g., data/processed/features_FBCSP_4.0_45.0Hz.npz """
-        return f"data/processed/features_{self.EXTRACTOR_TYPE}_{self.L_FREQ}_{self.H_FREQ}Hz.npz"
+        iir_str = f"IIR-{self.L_FREQ}-{self.H_FREQ}" if self.L_FREQ is not None else "IIR-False"
+        res_str = f"Res-{self.FS_RESAMPLE}" if self.FS_RESAMPLE is not None else "Res-False"
+        reg_str = f"Reg-{self.CSP_REGULARIZATION}" if hasattr(self, 'CSP_REGULARIZATION') else "Reg-None"
+
+        if self.REFERENCE_CHANNELS == 'average':
+            ref_str = "Ref-CAR"
+        elif isinstance(self.REFERENCE_CHANNELS, list) and len(self.REFERENCE_CHANNELS) > 0:
+            ref_str = f"Ref-{self.REFERENCE_CHANNELS[0]}" # تبدیل می‌شود به Ref-Cz
+        else:
+            ref_str = "Ref-None"
+
+        filename = f"features_{self.EXTRACTOR_TYPE}_{iir_str}_{ref_str}_{res_str}_{reg_str}.npz"
+        return f"data/processed/{filename}"
 
     # Preprocessing
     FS_RESAMPLE = 128.0
@@ -49,7 +60,6 @@ class Config:
     RANDOM_STATE = 36  # Kept your specific random state
 
     # --- Model Base Parameters (Avoid defaults in functions) ---
-    SVM_PARAMS = {'kernel': 'rbf', 'C': 1.0, 'probability': True}
     SVM_PARAMS = {
         'kernel': 'rbf',
         'C': 0.1,                 # Lower C = Softer margin (ignores outliers)

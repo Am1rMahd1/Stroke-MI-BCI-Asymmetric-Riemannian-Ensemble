@@ -20,13 +20,14 @@ class StrokeEEGPreprocessor(BasePreprocessor):
         raw.drop_channels(self.config.DROP_CHANNELS, on_missing='ignore')
 
         # Filtering
-        raw.filter(
-            l_freq=self.config.L_FREQ,
-            h_freq=self.config.H_FREQ,
-            method='iir',
-            iir_params=self.config.IIR_PARAMS,
-            verbose=False,
-        )
+        if self.config.L_FREQ is not None and self.config.H_FREQ is not None:
+            raw.filter(
+                l_freq=self.config.L_FREQ,
+                h_freq=self.config.H_FREQ,
+                method='iir',
+                iir_params=self.config.IIR_PARAMS,
+                verbose=False,
+            )
 
         # Montage
         montage = mne.channels.make_standard_montage(self.config.MONTAGE_NAME)
@@ -71,7 +72,8 @@ class SubjectDataLoader(BaseLoader):
             verbose=False,
         )
 
-        epochs.resample(self.config.FS_RESAMPLE, verbose=False)
+        if self.config.FS_RESAMPLE is not None:
+            epochs.resample(self.config.FS_RESAMPLE, verbose=False)
         return epochs
 
     def load_subject_data(self, subject_id):
