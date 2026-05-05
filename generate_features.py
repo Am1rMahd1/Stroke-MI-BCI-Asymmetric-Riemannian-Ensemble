@@ -29,9 +29,9 @@ def generate_and_save_dataset(step_config):
     output_filename = f"dataset_step_{step_config["name"]}.npz"
     output_path = os.path.join(config.PROCESSED_DATA_DIR, output_filename)
 
-    if os.path.exists(output_path):
-        print(f"Dataset already exists at {output_path}. Skipping.")
-        return output_path
+    # if os.path.exists(output_path):
+    #     print(f"Dataset already exists at {output_path}. Skipping.")
+    #     return output_path
 
     for subject_id in range(1, 6):
         # 1. (Filtering, Resampling, Referencing)
@@ -124,7 +124,7 @@ if __name__ == "__main__":
             "filter": {
                 "filter_l_freq": 4.0,
                 "filter_h_freq": 45.0,
-                "filter_iir_params": dict(order=2, ftype='butter'),
+                "filter_iir_params": dict(order=4, ftype='butter'),
             },
             "ref": ['Cz'],
             "resample": 128.0,

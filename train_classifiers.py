@@ -11,8 +11,8 @@ from classifiers import SVMClassifier, LDAClassifier, WeightedEnsembleClassifier
     AutoTuningSVMClassifier, AutoTuningLDAClassifier, AutoTuningKNNClassifier, AutoTuningXGBoostClassifier, \
     AutoTuningRandomForest, AutoTuningLogisticRegression
 from config.config import Config
-from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS
-from extractors import CSPExtractor, FBCSPExtractor
+from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS, SVM_PARAMS, SVM_GRID, LR_GRID
+from extractors import CSPExtractor, FBCSPExtractor, CSPAndVarianceExtractor, RiemannianExtractor
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter, InterLOSOSplitter, InterGroupKFoldSplitter
 
 def calculate_metrics(y_true, y_pred):
@@ -42,14 +42,22 @@ def calculate_metrics(y_true, y_pred):
         "kappa": custom_kappa
     }
 
-def evaluate_intra_subject(X_all, y_all, groups_all, extractor, classifiers, splitter, run_name):
+def evaluate_intra_subject(X_all, y_all, groups_all, ext_name, ext_params, classifiers, splitter, run_name):
     """ Calculates metrics per subject, logs global averages, and saves per-subject details as an artifact. """
+
+    EXTRACTOR_CLASS_MAP = {
+        'FBCSP': FBCSPExtractor,
+        'CSP': CSPExtractor,
+        'CSPAndVariance': CSPAndVarianceExtractor,
+        'RiemannianExtractor': RiemannianExtractor
+    }
+    ExtractorClass = EXTRACTOR_CLASS_MAP[ext_name]
 
     with mlflow.start_run(run_name=run_name):
 
         mlflow.log_param("evaluation_phase", "Intra-Subject")
         mlflow.log_param("validation_strategy", type(splitter).__name__)
-        mlflow.log_param("feature_extractor", extractor.name)
+        mlflow.log_param("feature_extractor", ext_name)
 
         for clf in classifiers:
             with mlflow.start_run(run_name=clf.name, nested=True):
@@ -72,12 +80,14 @@ def evaluate_intra_subject(X_all, y_all, groups_all, extractor, classifiers, spl
                         X_train_raw, y_train = X_sub[train_idx], y_sub[train_idx]
                         X_test_raw, y_test = X_sub[test_idx], y_sub[test_idx]
 
+                        fold_extractor = ExtractorClass(**ext_params)
+
                         # 1. Fit extractor ONLY on training data
-                        extractor.fit(X_train_raw, y_train)
+                        fold_extractor.fit(X_train_raw, y_train)
 
                         # 2. Transform both train and test data
-                        X_train_features = extractor.transform(X_train_raw)
-                        X_test_features = extractor.transform(X_test_raw)
+                        X_train_features = fold_extractor.transform(X_train_raw)
+                        X_test_features = fold_extractor.transform(X_test_raw)
 
                         # 3. Train classifier on features and predict
                         clf.train(X_train_features, y_train)
@@ -149,7 +159,10 @@ def run_phase1_ablation():
         return
 
     classifiers = [
-        KNNClassifier(KNN_PARAMS),
+        # SVMClassifier(SVM_PARAMS)
+        # AutoTuningSVMClassifier(SVM_GRID)
+        # KNNClassifier(KNN_PARAMS),
+        AutoTuningLogisticRegression(LR_GRID)
         # LDAClassifier(LDA_PARAMS),
         # AutoTuningLDAClassifier(LDA_GRID)
     ]
@@ -159,6 +172,8 @@ def run_phase1_ablation():
         train_size=config.SHUFFLE_TRAIN_SIZE,
         random_state=config.RANDOM_STATE
     )
+
+    # cv_splitter = IntraKFoldSplitter()
 
     for file_path in dataset_files:
         file_name = os.path.basename(file_path).replace(".npz", "")
@@ -176,19 +191,34 @@ def run_phase1_ablation():
         sfreq = data['samplingFreq']
 
         extractors = {
-            # "CSP": CSPExtractor(
-            #     numberOfComponents=config.N_COMPONENTS,
-            #     regularization=None
-            # ),
-            "FBCSP": FBCSPExtractor(
-                sfreq=sfreq,
-                freq_bands=config.FREQ_BANDS,
-                numberOfComponents=config.N_COMPONENTS,
-                regularization=None,
-            )
+            'FBCSP': {
+                'sfreq': sfreq,
+                'freq_bands': config.FREQ_BANDS,
+                "numberOfComponents": config.N_COMPONENTS,
+                "regularization": None
+            },
+            # "CSPAndVariance": {
+            #     "numberOfComponents": config.N_COMPONENTS,
+            #     "regularization": None
+            # },
+            # "RiemannianExtractor": {
+            #     "estimator": 'oas'
+            # }
         }
+        # extractors = {
+        #     # "CSP": CSPExtractor(
+        #     #     numberOfComponents=config.N_COMPONENTS,
+        #     #     regularization=None
+        #     # ),
+        #     "FBCSP": FBCSPExtractor(
+        #         sfreq=sfreq,
+        #         freq_bands=config.FREQ_BANDS,
+        #         numberOfComponents=config.N_COMPONENTS,
+        #         regularization=None,
+        #     )
+        # }
 
-        for ext_name, extractor in extractors.items():
+        for ext_name, ext_params in extractors.items():
             print(f"  --> Using Extractor: {ext_name}")
             run_name = f"Abl_{file_name}_{ext_name}"
 
@@ -196,7 +226,8 @@ def run_phase1_ablation():
                 X_all=X_all,
                 y_all=y_all,
                 groups_all=groups_all,
-                extractor=extractor,
+                ext_name=ext_name,       # Pass the string name
+                ext_params=ext_params,   # Pass your parameter dictionary
                 classifiers=classifiers,
                 splitter=cv_splitter,
                 run_name=run_name,
