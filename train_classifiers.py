@@ -7,12 +7,15 @@ import mlflow
 from sklearn.metrics import accuracy_score, confusion_matrix
 from tqdm import tqdm
 
+from EEGAugmentor import EEGAugmentor, EEGAugmentor2
+from EEGnet import EEGNetClassifier, EEGNetClassifierMinimized, AutoTuningEEGNet
 from classifiers import SVMClassifier, LDAClassifier, WeightedEnsembleClassifier, KNNClassifier, \
     AutoTuningSVMClassifier, AutoTuningLDAClassifier, AutoTuningKNNClassifier, AutoTuningXGBoostClassifier, \
     AutoTuningRandomForest, AutoTuningLogisticRegression
 from config.config import Config
 from config.model_parameters import LDA_PARAMS, LDA_GRID, KNN_PARAMS, SVM_PARAMS, SVM_GRID, LR_GRID, KNN_GRID
 from extractors import CSPExtractor, FBCSPExtractor, CSPAndVarianceExtractor, RiemannianExtractor
+from generate_features import RCSPExtractor
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter, InterLOSOSplitter, InterGroupKFoldSplitter
 
 def calculate_metrics(y_true, y_pred):
@@ -49,7 +52,8 @@ def evaluate_intra_subject(X_all, y_all, groups_all, ext_name, ext_params, class
         'FBCSP': FBCSPExtractor,
         'CSP': CSPExtractor,
         'CSPAndVariance': CSPAndVarianceExtractor,
-        'RiemannianExtractor': RiemannianExtractor
+        'RiemannianExtractor': RiemannianExtractor,
+        'RCSPExtractor': RCSPExtractor,
     }
     ExtractorClass = EXTRACTOR_CLASS_MAP[ext_name]
 
@@ -80,20 +84,33 @@ def evaluate_intra_subject(X_all, y_all, groups_all, ext_name, ext_params, class
                         X_train_raw, y_train = X_sub[train_idx], y_sub[train_idx]
                         X_test_raw, y_test = X_sub[test_idx], y_sub[test_idx]
 
+
+                        # ==========================================
+                        # 1. ADD AUGMENTATION HERE (ONLY ON TRAIN)
+                        # ==========================================
+                        # augmentor = EEGAugmentor(noise_level=0.001)
+                        augmentor = EEGAugmentor2(method='mixup', multiplier=5)
+                        X_train_raw, y_train = augmentor.augment(X_train_raw, y_train)
+                        # Now X_train_raw and y_train are doubled in size
+                        # ==========================================
+
                         fold_extractor = ExtractorClass(**ext_params)
 
                         # 1. Fit extractor ONLY on training data
-                        fold_extractor.fit(X_train_raw, y_train)
+                        # fold_extractor.fit(X_train_raw, y_train)
 
                         # 2. Transform both train and test data
-                        X_train_features = fold_extractor.transform(X_train_raw)
-                        X_test_features = fold_extractor.transform(X_test_raw)
-
+                        # X_train_features = fold_extractor.transform(X_train_raw)
+                        # X_test_features = fold_extractor.transform(X_test_raw)
+                        X_train_features = X_train_raw
+                        X_test_features = X_test_raw
                         # 3. Train classifier on features and predict
                         clf.train(X_train_features, y_train)
                         y_pred = clf.predict(X_test_features)
+                        # y_pred = clf.predict(X_train_features)
 
                         metrics = calculate_metrics(y_test, y_pred)
+                        # metrics = calculate_metrics(y_train, y_pred)
 
                         for k, v in metrics.items(): fold_metrics[k].append(v)
 
@@ -163,18 +180,21 @@ def run_phase1_ablation():
         # AutoTuningSVMClassifier(SVM_GRID)
         # KNNClassifier(KNN_PARAMS),
         # AutoTuningKNNClassifier(KNN_GRID),
-        AutoTuningLogisticRegression(LR_GRID)
+        # AutoTuningLogisticRegression(LR_GRID)
         # LDAClassifier(LDA_PARAMS),
-        # AutoTuningLDAClassifier(LDA_GRID)
+        # AutoTuningLDAClassifier(LDA_GRID),
+        EEGNetClassifier(nb_classes=2,chans=30, samples=512),
+        # EEGNetClassifierMinimized(nb_classes=2,chans=9, samples=512),
+        # AutoTuningEEGNet(nb_classes=2,chans=9, samples=512),
     ]
 
-    cv_splitter = IntraShuffleSplitter(
-        n_splits=config.N_SPLITS,
-        train_size=config.SHUFFLE_TRAIN_SIZE,
-        random_state=config.RANDOM_STATE
-    )
+    # cv_splitter = IntraShuffleSplitter(
+    #     n_splits=config.N_SPLITS,
+    #     train_size=config.SHUFFLE_TRAIN_SIZE,
+    #     random_state=config.RANDOM_STATE
+    # )
 
-    # cv_splitter = IntraKFoldSplitter()
+    cv_splitter = IntraKFoldSplitter()
 
     for file_path in dataset_files:
         file_name = os.path.basename(file_path).replace(".npz", "")
@@ -192,12 +212,13 @@ def run_phase1_ablation():
         sfreq = data['samplingFreq']
 
         extractors = {
-            'FBCSP': {
-                'sfreq': sfreq,
-                'freq_bands': config.FREQ_BANDS,
-                "numberOfComponents": config.N_COMPONENTS,
-                "regularization": None
-            },
+            # 'FBCSP': {
+            #     'sfreq': sfreq,
+            #     'freq_bands': config.FREQ_BANDS,
+            #     "numberOfComponents": config.N_COMPONENTS,
+            #     "regularization": None
+            # },
+            'RCSPExtractor': {},
             # "CSPAndVariance": {
             #     "numberOfComponents": config.N_COMPONENTS,
             #     "regularization": None

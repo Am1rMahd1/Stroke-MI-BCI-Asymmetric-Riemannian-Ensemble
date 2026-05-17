@@ -1,9 +1,9 @@
 # extractors.py
 import numpy as np
-import mne
-from mne.decoding import CSP
-from pyriemann.estimation import Covariances
-from pyriemann.tangentspace import TangentSpace
+# import mne
+# from mne.decoding import CSP
+# from pyriemann.estimation import Covariances
+# from pyriemann.tangentspace import TangentSpace
 from scipy.linalg import fractional_matrix_power
 
 from interfaces import BaseExtractor

@@ -7,7 +7,7 @@ class Config:
     PROCESSED_DATA_DIR='data/processed/'
 
     N_SPLITS=10
-    SHUFFLE_TRAIN_SIZE=0.8
+    SHUFFLE_TRAIN_SIZE=0.6
 
     # Preprocessing
 
@@ -20,12 +20,12 @@ class Config:
     TARGET_CLASSES = [1, 2]  # 1: left_hand, 2: right_hand
 
     # Feature Extraction
-    N_COMPONENTS = 5
+    N_COMPONENTS = 2
     FREQ_BANDS = {
         # 'delta': (0.5, 4.0),
         'theta': (4.0, 8.0),
         'alpha': (8.0, 12.0),
-        'beta': (13.0, 25.0),
+        # 'beta': (13.0, 25.0),
         # 'gamma': (30.0, 45.0),
     }
 
