@@ -1,9 +1,12 @@
 import glob
 import os
 import copy
+import random
+
 import pandas as pd
 import numpy as np
 import mlflow
+import torch
 from sklearn.metrics import accuracy_score, confusion_matrix
 from tqdm import tqdm
 
@@ -93,6 +96,22 @@ def evaluate_intra_subject(X_all, y_all, groups_all, ext_name, ext_params, class
                         X_train_raw, y_train = augmentor.augment(X_train_raw, y_train)
                         # Now X_train_raw and y_train are doubled in size
                         # ==========================================
+
+                        # ==========================================
+                        # 1.5. ADD Z-NORMALIZATION HERE
+                        # ==========================================
+                        # Calculate mean/std ONLY on the augmented training data
+                        # Assuming X shape is (Samples, Channels, Time)
+                        # We calculate mean/std per channel
+                        train_mean = X_train_raw.mean(axis=(0, 2), keepdims=True)
+                        train_std = X_train_raw.std(axis=(0, 2), keepdims=True)
+
+                        # Add a small epsilon to avoid division by zero
+                        train_std[train_std == 0] = 1e-8
+
+                        # Normalize training and testing sets
+                        X_train_raw = (X_train_raw - train_mean) / train_std
+                        X_test_raw = (X_test_raw - train_mean) / train_std
 
                         fold_extractor = ExtractorClass(**ext_params)
 
@@ -301,8 +320,25 @@ def run_phase3_inter_models(base_config):
     print("Running Group K-Fold...")
     evaluate_inter_subject(X, y, groups, models, InterGroupKFoldSplitter(cfg), "Phase3_GroupKFold", cfg)
 
+def set_seed(seed=42):
+    """Sets the seed for reproducibility."""
+    # Python random module
+    random.seed(seed)
+    # Python environment
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    # Numpy
+    np.random.seed(seed)
+    # PyTorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    # PyTorch CUDNN
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 if __name__ == "__main__":
     config = Config()
+    set_seed(config.RANDOM_STATE)
     mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
     mlflow.set_experiment(config.EXPERIMENT_NAME)
 
