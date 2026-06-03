@@ -1,110 +1,146 @@
 # extractors.py
 import numpy as np
-import mne
-from mne.decoding import CSP
+# import mne
+# from mne.decoding import CSP
+# from pyriemann.estimation import Covariances
+# from pyriemann.tangentspace import TangentSpace
 from scipy.linalg import fractional_matrix_power
 
 from interfaces import BaseExtractor
 
-class CSPExtractor(BaseExtractor):
-    def __init__(self, config):
-        self.config = config
+class CSPExtractor:
+    def __init__(self, numberOfComponents, regularization):
+        """
+        Standard Common Spatial Pattern (CSP) extractor for NumPy arrays.
+        """
+        self.name="CSP"
+        self.csp = CSP(
+            n_components=numberOfComponents,
+            reg=regularization,
+            log=True,
+            norm_trace=True
+        )
 
-    def fit_transform(self, epochs):
-        x_epochs = epochs.get_data(copy=False)
-        y = epochs.events[:, -1]
+    def fit(self, X, y):
+        """
+        Fits the CSP on the training data.
+        X shape: (n_epochs, n_channels, n_times)
+        y shape: (n_epochs,)
+        """
+        self.csp.fit(X, y)
+        return self
 
-        mask = np.isin(y, self.config.TARGET_CLASSES)
-        x_epochs = x_epochs[mask]
-        y = y[mask]
+    def transform(self, X):
+        """
+        Extracts features from the data.
+        """
+        return self.csp.transform(X)
 
-        csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
-        x_csp = csp.fit_transform(x_epochs, y)
+class FBCSPExtractor:
+    def __init__(self, sfreq, freq_bands, numberOfComponents, regularization):
+        """
+        Filter Bank Common Spatial Pattern (FBCSP) extractor for NumPy arrays.
+        sfreq: Float, sampling frequency of the data (loaded from your .npz file)
+        freq_bands: List of tuples, e.g., [(4, 8), (8, 12), (12, 16), (16, 20), (20, 24), (24, 28), (28, 32)]
+        """
+        self.name="FBCSP"
+        self.sfreq = sfreq
+        self.freq_bands = freq_bands
+        self.n_components = numberOfComponents
 
-        return x_csp, y
-
-
-class FBCSPExtractor(BaseExtractor):
-    def __init__(self, config):
-        self.config = config
-
-    def fit_transform(self, epochs):
-        x_epochs = epochs.get_data(copy=False)
-        y = epochs.events[:, -1]
-
-        mask = np.isin(y, self.config.TARGET_CLASSES)
-        x_epochs = x_epochs[mask]
-        y = y[mask]
-
-        x_fbcsp = []
-
-        for band_name, (l_freq, h_freq) in self.config.FREQ_BANDS.items():
-            x_band = mne.filter.filter_data(
-                x_epochs,
-                epochs.info['sfreq'],
-                l_freq,
-                h_freq,
-                verbose=False,
+        # Initialize a separate CSP for each frequency band
+        self.csps = [
+            CSP(
+                n_components=numberOfComponents,
+                reg=regularization,
+                log=True,
+                norm_trace=True,
             )
+            for _ in freq_bands
+        ]
 
-            csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
-            x_band_csp = csp.fit_transform(x_band, y)
-            x_fbcsp.append(x_band_csp)
-
-        x_fbcsp_concatenated = np.hstack(x_fbcsp)
-        return x_fbcsp_concatenated, y
-
-class EAFBCSPExtractor(BaseExtractor):
-    def __init__(self, config):
-        self.config = config
-
-    def fit_transform(self, epochs):
-        x_epochs = epochs.get_data(copy=False)
-        y = epochs.events[:, -1]
-
-        mask = np.isin(y, self.config.TARGET_CLASSES)
-        x_epochs = x_epochs[mask]
-        y = y[mask]
-
-        # ==========================================
-        # 1. EUCLIDEAN ALIGNMENT (EA)
-        # ==========================================
-        covariances = []
-        for epoch in x_epochs:
-            cov = np.cov(epoch)
-            covariances.append(cov)
-
-        reference_matrix = np.mean(covariances, axis=0)
-
-        # --- THE FIX: Diagonal Regularization ---
-        # Nudge the diagonal to fix the CAR filter rank-deficiency
-        epsilon = 1e-5 * (np.trace(reference_matrix) / reference_matrix.shape[0])
-        reference_matrix += epsilon * np.eye(reference_matrix.shape[0])
-        # ----------------------------------------
-
-        R = fractional_matrix_power(reference_matrix, -0.5).real
-
-        x_epochs_aligned = np.array([R @ epoch for epoch in x_epochs])
-
-        # ==========================================
-        # 2. FILTER BANK CSP (FBCSP)
-        # ==========================================
-        x_fbcsp = []
-
-        for band_name, (l_freq, h_freq) in self.config.FREQ_BANDS.items():
-            x_band = mne.filter.filter_data(
-                x_epochs_aligned,
-                epochs.info['sfreq'],
-                l_freq,
-                h_freq,
-                verbose=False,
+    def _filter_data(self, X):
+        """
+        Filters the input array X into multiple frequency bands.
+        """
+        filtered_X = []
+        for l_freq, h_freq in self.freq_bands.values():
+            # mne.filter.filter_data handles NumPy arrays perfectly
+            X_band = mne.filter.filter_data(
+                X,
+                sfreq=self.sfreq,
+                l_freq=l_freq,
+                h_freq=h_freq,
+                iir_params=dict(order=4, ftype='butter'),
+                method='iir',
+                verbose=False
             )
+            filtered_X.append(X_band)
+        return filtered_X
 
-            # Keep ledoit_wolf here as well!
-            csp = CSP(n_components=self.config.N_COMPONENTS, reg=self.config.CSP_REGULARIZATION, log=True, norm_trace=True)
-            x_band_csp = csp.fit_transform(x_band, y)
-            x_fbcsp.append(x_band_csp)
+    def fit(self, X, y):
+        """
+        Filters data into bands and fits a CSP model for each band.
+        """
+        filtered_X = self._filter_data(X)
+        for i, X_band in enumerate(filtered_X):
+            self.csps[i].fit(X_band, y)
+        return self
 
-        x_fbcsp_concatenated = np.hstack(x_fbcsp)
+    def transform(self, X):
+        """
+        Filters data, applies the fitted CSPs, and concatenates the features.
+        """
+        filtered_X = self._filter_data(X)
+        features = []
+        for i, X_band in enumerate(filtered_X):
+            band_features = self.csps[i].transform(X_band)
+            features.append(band_features)
 
-        return x_fbcsp_concatenated, y
+        # Concatenate features horizontally (combining all bands for each epoch)
+        return np.hstack(features)
+
+class CSPAndVarianceExtractor:
+    def __init__(self, numberOfComponents, regularization):
+        self.name = "CSP_Plus_Variance"
+        self.csp = CSP(n_components=numberOfComponents, reg=regularization, log=True, norm_trace=True)
+
+    def fit(self, X, y):
+        self.csp.fit(X, y)
+        return self
+
+    def transform(self, X):
+        # 1. Get CSP features
+        csp_features = self.csp.transform(X)
+
+        # 2. Get Log-Variance of each channel across time
+        # X shape is (epochs, channels, time) -> variance along time axis (axis=2)
+        var_features = np.log(np.var(X, axis=2) + 1e-8)
+
+        # 3. Concatenate horizontally
+        # Result shape: (n_epochs, n_csp_components + n_channels)
+        combined_features = np.hstack((csp_features, var_features))
+
+        return combined_features
+
+class RiemannianExtractor:
+    def __init__(self, estimator):
+        """
+        Extracts Tangent Space features from covariance matrices.
+        'oas' (Oracle Approximating Shrinkage) is excellent for small sample sizes.
+        """
+        self.name = "Riemannian_TangentSpace"
+        self.cov = Covariances(estimator=estimator)
+        self.ts = TangentSpace(metric='riemann')
+
+    def fit(self, X, y):
+        """
+        X shape: (n_epochs, n_channels, n_times)
+        """
+        covmats = self.cov.fit_transform(X)
+        self.ts.fit(covmats, y)
+        return self
+
+    def transform(self, X):
+        covmats = self.cov.transform(X)
+        return self.ts.transform(covmats)

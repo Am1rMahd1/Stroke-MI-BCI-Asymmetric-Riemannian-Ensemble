@@ -1,11 +1,14 @@
-import mne
+# import mne
 import pandas as pd
 from pathlib import Path
 from interfaces import BasePreprocessor, BaseLoader
 
 class StrokeEEGPreprocessor(BasePreprocessor):
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, referenceChannels, dropChannels, filter, montageName):
+        self.referenceChannels = referenceChannels
+        self.dropChannels = dropChannels
+        self.filter = filter
+        self.montageName = montageName
 
     def process(self, raw):
         # Channel mapping and typing
@@ -13,36 +16,64 @@ class StrokeEEGPreprocessor(BasePreprocessor):
         raw.set_channel_types({'EOG1' : 'eog', 'EOG2' : 'eog'}, verbose=False)
 
         # Referencing and picking
-        raw.set_eeg_reference(self.config.REFERENCE_CHANNELS, verbose=False)
-        raw.pick_types(eeg=True, eog=False, meg=False, stim=False, exclude='bads', verbose=False)
+        if self.referenceChannels:  # Only apply if not an empty list
+            raw.set_eeg_reference(
+                ref_channels=self.referenceChannels,
+                verbose=False
+            )
+
+        raw.pick_types(
+            eeg=True,
+            eog=False,
+            meg=False,
+            stim=False,
+            exclude='bads',
+            verbose=False
+        )
+
+        # raw.pick_channels(
+        #     # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
+        #     ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
+        #     # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
+        #     verbose=False
+        # )
 
         # Dropping specific channels
-        raw.drop_channels(self.config.DROP_CHANNELS, on_missing='ignore')
+        raw.drop_channels(
+            ch_names=self.dropChannels,
+            on_missing='ignore'
+        )
 
         # Filtering
-        if self.config.L_FREQ is not None and self.config.H_FREQ is not None:
+        if self.filter is not None:
             raw.filter(
-                l_freq=self.config.L_FREQ,
-                h_freq=self.config.H_FREQ,
+                l_freq=self.filter["filter_l_freq"],
+                h_freq=self.filter["filter_h_freq"],
                 method='iir',
-                iir_params=self.config.IIR_PARAMS,
+                iir_params=self.filter["filter_iir_params"],
                 verbose=False,
             )
 
         # Montage
-        montage = mne.channels.make_standard_montage(self.config.MONTAGE_NAME)
+        montage = mne.channels.make_standard_montage(
+            kind=self.montageName
+        )
         raw.set_montage(montage, match_case=False, on_missing='ignore', verbose=False)
 
         return raw
 
 
 class SubjectDataLoader(BaseLoader):
-    def __init__(self, config, preprocessor):
-        self.config = config
+    def __init__(self, baseEdfFilesPath, eventsFilePath, preprocessor, epochTMin, epochTMax, resmapleFreq):
+        self.baseEdfFilesPath = baseEdfFilesPath
+        self.eventsFilePath = eventsFilePath
         self.preprocessor = preprocessor
+        self.epochTMin = epochTMin
+        self.epochTMax = epochTMax
+        self.resmapleFreq = resmapleFreq
 
     def _extract_epochs(self, raw):
-        events_df = pd.read_csv(self.config.EVENTS_FILE)
+        events_df = pd.read_csv(self.eventsFilePath)
         motor_imagery_df = events_df[events_df['value'] == 2]
 
         onset = motor_imagery_df['onset'] / 1000.0
@@ -64,20 +95,20 @@ class SubjectDataLoader(BaseLoader):
             raw,
             events,
             event_id=event_id,
-            tmin=self.config.EPOCH_TMIN,
-            tmax=self.config.EPOCH_TMAX,
+            tmin=self.epochTMin,
+            tmax=self.epochTMax,
             baseline=None,
             preload=True,
             proj=True,
             verbose=False,
         )
 
-        if self.config.FS_RESAMPLE is not None:
-            epochs.resample(self.config.FS_RESAMPLE, verbose=False)
+        if self.resmapleFreq != 500:
+            epochs.resample(self.resmapleFreq, verbose=False)
         return epochs
 
     def load_subject_data(self, subject_id):
-        edf_file = f"{self.config.BASE_EDF_PATH}/sub-{subject_id:02d}/eeg/sub-{subject_id:02d}_task-motor-imagery_eeg.edf"
+        edf_file = f"{self.baseEdfFilesPath}/sub-{subject_id:02d}/eeg/sub-{subject_id:02d}_task-motor-imagery_eeg.edf"
 
         if not Path(edf_file).exists():
             raise FileNotFoundError(f"File {edf_file} not found.")
