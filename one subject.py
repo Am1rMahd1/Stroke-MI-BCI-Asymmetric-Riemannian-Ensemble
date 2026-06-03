@@ -12,7 +12,11 @@ import torch.optim as optim
 
 from torch.utils.data import DataLoader, TensorDataset
 
-from interfaces import BaseClassifier
+from Nature import EEGTransformer
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+from torch.autograd import Variable
+import copy
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter
 
 
@@ -153,61 +157,209 @@ class EEGNet_CNN_LSTM_TCN_Concat(nn.Module):
         out = self.classifier(combined_features)
         return out
 # 2. Inherit from BaseClassifier
-class EEGNetClassifier(BaseClassifier):
-    def __init__(self, nb_classes, chans, samples, lr=0.001, epochs=50, batch_size=32, device="cuda"):
+class EEGNetClassifier(): # (اگر BaseClassifier دارید، آن را داخل پرانتز قرار دهید)
+    def __init__(self, nb_classes, chans, samples, lr=0.001, epochs=1000, batch_size=72,
+                 validate_ratio=0.3, number_aug=3, number_seg=8, device=None):
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
         self.batch_size = batch_size
-        self.model = EEGNet_CNN_LSTM_TCN_Concat(nb_classes=nb_classes, chans=chans, samples=samples).to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
-        self.criterion = nn.CrossEntropyLoss()
+        self.nb_classes = nb_classes
+        self.chans = chans
+        self.samples = samples
+
+        # Hyperparameters specific to ExP logic
+        self.validate_ratio = validate_ratio
+        self.number_aug = number_aug
+        self.number_seg = number_seg
+        self.lr = lr
+        self.b1 = 0.5
+        self.b2 = 0.999
+
+        # Instantiate Model
+        self.model = EEGTransformer(num_classes=nb_classes, num_channels=chans).to(self.device)
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+
+        # To track the best model
+        self.best_model_wts = None
+        self.best_epoch = 0
 
     @property
     def name(self):
-        return "EEG-Net"
+        return "EEG-Net-Transformer"
+
+    def interaug(self, timg, label):
+        """ Segmentation and Reconstruction (S&R) Data Augmentation """
+        aug_data = []
+        aug_label = []
+        # Calculate how many records to generate per class
+        number_records_by_augmentation = self.number_aug * max(1, int(self.batch_size / self.nb_classes))
+        number_segmentation_points = self.samples // self.number_seg
+
+        for clsAug in range(self.nb_classes):
+            cls_idx = np.where(label == clsAug)[0] # zero-indexed label expected here
+
+            # If a class is missing in the current split, skip it
+            if len(cls_idx) == 0:
+                continue
+
+            tmp_data = timg[cls_idx]
+            tmp_label = label[cls_idx]
+
+            tmp_aug_data = np.zeros((number_records_by_augmentation, 1, self.chans, self.samples))
+            for ri in range(number_records_by_augmentation):
+                for rj in range(self.number_seg):
+                    rand_idx = np.random.randint(0, tmp_data.shape[0], self.number_seg)
+                    start_pt = rj * number_segmentation_points
+                    end_pt = (rj + 1) * number_segmentation_points
+
+                    tmp_aug_data[ri, :, :, start_pt:end_pt] = tmp_data[rand_idx[rj], :, :, start_pt:end_pt]
+
+            aug_data.append(tmp_aug_data)
+            # ایجاد یک آرایه از لیبل‌های کلاس فعلی به تعداد دقیق دیتای مصنوعی تولید شده
+            aug_label.append(np.full(number_records_by_augmentation, clsAug))
+
+        aug_data = np.concatenate(aug_data)
+        aug_label = np.concatenate(aug_label)
+
+        # Shuffle Augmented Data
+        aug_shuffle = np.random.permutation(len(aug_data))
+        aug_data = aug_data[aug_shuffle, :, :]
+        aug_label = aug_label[aug_shuffle]
+
+        # Convert to Tensors
+        aug_data = torch.from_numpy(aug_data).float().to(self.device)
+        aug_label = torch.from_numpy(aug_label).long().to(self.device)
+
+        return aug_data, aug_label
 
     def train(self, x_train, y_train):
-        """
-        x_train: numpy array of shape (trials, channels, samples)
-        y_train: numpy array of shape (trials,)
-        """
-        self.model.train()
+        # 1. Protect signal shape: Ensure 4D (Trials, 1, Channels, Samples)
+        if len(x_train.shape) == 3:
+            x_train_4d = np.expand_dims(x_train, axis=1)
+        else:
+            x_train_4d = x_train
 
         y_train_zero_indexed = y_train - 1
 
-        # Convert to Tensors
-        x_tensor = torch.from_numpy(x_train).float()
+        # 2. Setup Dataset
+        x_tensor = torch.from_numpy(x_train_4d).float()
         y_tensor = torch.from_numpy(y_train_zero_indexed).long()
-
         dataset = TensorDataset(x_tensor, y_tensor)
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+        # 3. Setup Optimizer
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, betas=(self.b1, self.b2))
+
+        min_val_loss = float('inf')
+
+        # 4. Training Loop
         for epoch in range(self.epochs):
-            for inputs, labels in loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+            self.model.train()
+            loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+            val_data_list = []
+            val_label_list = []
+
+            for inputs, labels in loader:
+                num_sample = inputs.shape[0]
+                num_validate = int(self.validate_ratio * num_sample)
+
+                # Split batch exactly like ExP logic
+                if num_validate > 0:
+                    train_data = inputs[:-num_validate]
+                    train_label = labels[:-num_validate]
+                    val_data_list.append(inputs[-num_validate:])
+                    val_label_list.append(labels[-num_validate:])
+                else:
+                    train_data = inputs
+                    train_label = labels
+
+                train_data = train_data.to(self.device)
+                train_label = train_label.to(self.device)
+
+                # Apply Augmentation
+                aug_data, aug_label = self.interaug(x_train_4d, y_train_zero_indexed)
+
+                # Concat real training data with artificial data
+                batch_data = torch.cat((train_data, aug_data))
+                batch_label = torch.cat((train_label, aug_label))
+
+                # Forward & Backward pass
                 self.optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels)
+                outputs = self.model(batch_data)
+
+                # --- هوشمندسازی: پیدا کردن خودکار تنسور کلاس‌بندی ---
+                if isinstance(outputs, tuple):
+                    for out in outputs:
+                        if isinstance(out, torch.Tensor) and out.dim() == 2:
+                            outputs = out
+                            break
+                # ---------------------------------------------------
+
+                loss = self.criterion(outputs, batch_label)
                 loss.backward()
                 self.optimizer.step()
 
-            # Optional: print(f"Epoch {epoch+1}/{self.epochs}, Loss: {running_loss/len(loader)}")
+            # 5. Validation Phase (End of Epoch)
+            if len(val_data_list) > 0:
+                self.model.eval()
+                val_data = torch.cat(val_data_list).to(self.device)
+                val_label = torch.cat(val_label_list).to(self.device)
+
+                with torch.no_grad():
+                    val_outputs = self.model(val_data)
+
+                    # --- هوشمندسازی: پیدا کردن خودکار تنسور کلاس‌بندی ---
+                    if isinstance(val_outputs, tuple):
+                        for out in val_outputs:
+                            if isinstance(out, torch.Tensor) and out.dim() == 2:
+                                val_outputs = out
+                                break
+                    # ---------------------------------------------------
+
+                    val_loss = self.criterion(val_outputs, val_label)
+
+                # Checkpoint best model
+                if val_loss.item() < min_val_loss:
+                    min_val_loss = val_loss.item()
+                    self.best_epoch = epoch
+                    self.best_model_wts = copy.deepcopy(self.model.state_dict())
+
+        # Load best model weights before ending train function
+        if self.best_model_wts is not None:
+            self.model.load_state_dict(self.best_model_wts)
 
     def predict(self, x_test):
+        # Ensure best weights are loaded
+        if self.best_model_wts is not None:
+            self.model.load_state_dict(self.best_model_wts)
+
         self.model.eval()
-        x_tensor = torch.from_numpy(x_test).float().to(self.device)
+
+        # Ensure 4D shape for test data
+        if len(x_test.shape) == 3:
+            x_test_4d = np.expand_dims(x_test, axis=1)
+        else:
+            x_test_4d = x_test
+
+        x_tensor = torch.from_numpy(x_test_4d).float().to(self.device)
 
         with torch.no_grad():
             outputs = self.model(x_tensor)
+
+            # --- هوشمندسازی: پیدا کردن خودکار تنسور کلاس‌بندی ---
+            if isinstance(outputs, tuple):
+                for out in outputs:
+                    if isinstance(out, torch.Tensor) and out.dim() == 2:
+                        outputs = out
+                        break
+            # ---------------------------------------------------
+
             _, predicted = torch.max(outputs, 1)
 
         res = predicted.cpu().numpy()
 
-        # FIX: Shift labels back from [0, 1] to [1, 2]
-        # so the output matches your original dataset labels
+        # Shift labels back from [0, 1] to [1, 2]
         return res + 1
-
 def calculate_metrics(y_true, y_pred):
     # 1. Calculate Custom BCI Kappa (pe hardcoded to 0.5)
     p0 = accuracy_score(y_true, y_pred)
@@ -249,7 +401,7 @@ torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-subject_id = "43"
+subject_id = "50"
 edf_file = f"/media/amirmahdi/NewVolume/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
 raw = mne.io.read_raw_edf(edf_file, preload=True, eog=['HEOL', 'HEOR'], stim_channel=[''], verbose=False)
 raw.rename_channels({'HEOL' : 'EOG1', 'HEOR' : 'EOG2'}, verbose=False)
@@ -270,17 +422,17 @@ raw.pick_types(
     exclude='bads',
     verbose=False
 )
-# raw.pick_channels(
-#     # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
-#     ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
-#     # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
-#     verbose=False
-# )
+raw.pick_channels(
+    # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
+    # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
+    ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
+    verbose=False
+)
 raw.filter(
     l_freq=4.0,
     h_freq=30.0,
     method='iir',
-    iir_params=dict(order=2, ftype='butter'),
+    # iir_params=dict(order=2, ftype='butter'),
     verbose=False,
 )
 raw.resample(500, verbose=False)
@@ -311,7 +463,7 @@ epochs = mne.Epochs(
     raw,
     events,
     event_id=event_id,
-    tmin=0.5,
+    tmin=0.0,
     tmax=4.0,
     baseline=None,
     preload=True,
@@ -328,7 +480,7 @@ y_labels = y_labels[mask]
 _, channels, samples = x_data.shape
 
 mlflow.set_tracking_uri("sqlite:///mlflow.db")
-mlflow.set_experiment("One Subject")
+mlflow.set_experiment("Single Subject")
 
 with mlflow.start_run(run_name=f"subject {subject_id}"):
     subject_avg_metrics = { "accuracy": [], "precision": [], "sensitivity": [], "kappa": [] }
@@ -362,14 +514,19 @@ with mlflow.start_run(run_name=f"subject {subject_id}"):
         # ==========================================
         # 1. ADD AUGMENTATION HERE (ONLY ON TRAIN)
         # ==========================================
-        augmentor = EEGAugmentor2(method='mixup', multiplier=6)
-        X_train_raw, y_train = augmentor.augment(X_train_raw, y_train)
+        augmentor = EEGAugmentor2(method='time_shift', multiplier=2)
+        # X_train_raw, y_train = augmentor.augment(X_train_raw, y_train)
         # Now X_train_raw and y_train are doubled in size
         # ==========================================
 
+        # config =Config()
+        # fold_extractor = FBCSPExtractor(500, config.FREQ_BANDS, config.N_COMPONENTS, None)
+        # fold_extractor.fit(X_train_raw, y_train)
 
-        X_train_features = X_train_raw
-        X_test_features = X_test_raw
+        # X_train_features = fold_extractor.transform(X_train_raw)
+        # X_test_features = fold_extractor.transform(X_test_raw)
+        X_train_features = X_train_raw[:, np.newaxis, :, :]
+        X_test_features = X_test_raw[:, np.newaxis, :, :]
 
         clf.train(X_train_features, y_train)
         y_pred = clf.predict(X_test_features)
