@@ -2,7 +2,7 @@
 
 class Config:
     # Paths
-    BASE_EDF_PATH = "/media/amirmahdi/NewVolume/edffile"
+    BASE_EDF_PATH = "/media/amirmahdi/129699CC9699B0A9/edffile"
     EVENTS_FILE = "data/task-motor-imagery_events.csv"
     PROCESSED_DATA_DIR='data/processed/'
 
@@ -38,7 +38,7 @@ class Config:
     }
 
     MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
-    EXPERIMENT_NAME = "BCI_Stroke_Classification"
+    EXPERIMENT_NAME = "BCI_Stroke_Classification_2"
 
     # --- Cross Validation Parameters ---
     RANDOM_STATE = 128  # Kept your specific random state
