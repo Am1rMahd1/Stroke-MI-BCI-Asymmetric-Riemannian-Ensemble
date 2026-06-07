@@ -1,4 +1,4 @@
-# import mne
+import mne
 import pandas as pd
 from pathlib import Path
 from interfaces import BasePreprocessor, BaseLoader
@@ -14,6 +14,12 @@ class StrokeEEGPreprocessor(BasePreprocessor):
         # Channel mapping and typing
         raw.rename_channels({'HEOL' : 'EOG1', 'HEOR' : 'EOG2'}, verbose=False)
         raw.set_channel_types({'EOG1' : 'eog', 'EOG2' : 'eog'}, verbose=False)
+
+        # Dropping specific channels
+        raw.drop_channels(
+            ch_names=self.dropChannels,
+            on_missing='ignore'
+        )
 
         # Referencing and picking
         if self.referenceChannels:  # Only apply if not an empty list
@@ -31,17 +37,11 @@ class StrokeEEGPreprocessor(BasePreprocessor):
             verbose=False
         )
 
-        # raw.pick_channels(
-        #     # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
-        #     ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
-        #     # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
-        #     verbose=False
-        # )
-
-        # Dropping specific channels
-        raw.drop_channels(
-            ch_names=self.dropChannels,
-            on_missing='ignore'
+        raw.pick_channels(
+            # ch_names=['C3', 'C4', 'Cz', 'CP3', 'CP4', 'CPz'],
+            # ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4'],
+            ch_names=['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4'],
+            verbose=False
         )
 
         # Filtering
@@ -50,9 +50,11 @@ class StrokeEEGPreprocessor(BasePreprocessor):
                 l_freq=self.filter["filter_l_freq"],
                 h_freq=self.filter["filter_h_freq"],
                 method='iir',
-                iir_params=self.filter["filter_iir_params"],
+                # iir_params=self.filter["filter_iir_params"],
                 verbose=False,
             )
+
+        raw.resample(500, verbose=False)
 
         # Montage
         montage = mne.channels.make_standard_montage(
@@ -90,21 +92,23 @@ class SubjectDataLoader(BaseLoader):
         annotations = mne.Annotations(onset=onset, duration=duration, description=description)
         raw.set_annotations(annotations, verbose=False)
 
-        events, event_id = mne.events_from_annotations(raw, verbose=False)
+        custom_mapping = {'left_hand': 1, 'right_hand': 2}
+        events, event_id = mne.events_from_annotations(raw, event_id=custom_mapping, verbose=False)
+        # UPDATE: Include the 1.5 seconds of rest BEFORE the imagery cue as a baseline
         epochs = mne.Epochs(
             raw,
             events,
             event_id=event_id,
-            tmin=self.epochTMin,
-            tmax=self.epochTMax,
-            baseline=None,
+            tmin=-1.5,        # Start 1.5 seconds BEFORE the motor imagery video starts (during value==1)
+            tmax=4.0,         # Run until the end of the 4-second motor imagery video
+            baseline=(-1.5, 0), # Use that pre-cue rest period to normalize the signal variance
             preload=True,
             proj=True,
             verbose=False,
         )
 
-        if self.resmapleFreq != 500:
-            epochs.resample(self.resmapleFreq, verbose=False)
+        # if self.resmapleFreq != 500:
+        #     epochs.resample(self.resmapleFreq, verbose=False)
         return epochs
 
     def load_subject_data(self, subject_id):

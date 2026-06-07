@@ -1,10 +1,12 @@
 # extractors.py
 import numpy as np
-# import mne
-# from mne.decoding import CSP
-# from pyriemann.estimation import Covariances
-# from pyriemann.tangentspace import TangentSpace
+import mne
+import scipy
+from mne.decoding import CSP
+from pyriemann.estimation import Covariances
+from pyriemann.tangentspace import TangentSpace
 from scipy.linalg import fractional_matrix_power
+from sklearn.neighbors import kneighbors_graph
 
 from interfaces import BaseExtractor
 
@@ -144,3 +146,79 @@ class RiemannianExtractor:
     def transform(self, X):
         covmats = self.cov.transform(X)
         return self.ts.transform(covmats)
+
+class LPPExtractor:
+    def __init__(self, numberOfComponents=2, numberOfNeighbors=5):
+        """
+        Locality Preserving Projection (LPP) extractor.
+        Accepts 3D raw EEG data arrays directly and extracts features internally
+        to maintain pipeline compatibility with 3D spatial filters.
+        """
+        self.name = "LPP"
+        self.numberOfComponents = numberOfComponents
+        self.numberOfNeighbors = numberOfNeighbors
+        self.projection_matrix_ = None
+
+    def _convert_to_features(self, X):
+        """
+        Internal helper to compress 3D raw time-series (epochs, channels, times)
+        into a 2D log-variance feature matrix (epochs, features).
+        If the input is already 2D, it passes through untouched.
+        """
+        if X.ndim == 3:
+            return np.log(np.var(X, axis=-1))
+        return X
+
+    def fit(self, X, y=None):
+        """
+        Fits the LPP on the training data.
+        X shape: (n_epochs, n_channels, n_times)
+        y shape: (n_epochs,)
+        """
+        # Automatically transform 3D raw array to 2D log-variance features internally
+        X_feat = self._convert_to_features(X)
+
+        n_samples, n_features = X_feat.shape
+
+        # Ensure neighbor count doesn't exceed sample pool boundaries
+        k = min(self.numberOfNeighbors, n_samples - 1)
+
+        # 1. Construct the local adjacency graph via K-Nearest Neighbors
+        W = kneighbors_graph(X_feat, k, mode='connectivity', include_self=False).toarray()
+        W = np.maximum(W, W.T)  # Ensure graph matrix symmetry
+
+        # 2. Compute Degree Matrix (D) and Graph Laplacian (L)
+        D = np.diag(np.sum(W, axis=1))
+        L = D - W
+
+        # 3. Project data to feature space: Xᵀ · L · X and Xᵀ · D · X
+        XTLX = X_feat.T @ L @ X_feat
+        XTDX = X_feat.T @ D @ X_feat
+
+        # Add a tiny regularization ridge to prevent mathematical singularity
+        XTDX += np.eye(n_features) * 1e-6
+
+        # 4. Solve the generalized eigenvalue problem
+        eigenvalues, eigenvectors = scipy.linalg.eigh(XTLX, XTDX)
+
+        # Sort eigenvectors by ascending eigenvalues
+        sorted_indices = np.argsort(eigenvalues)
+
+        # Save the transformation mapping matrix
+        self.projection_matrix_ = eigenvectors[:, sorted_indices[:self.numberOfComponents]]
+
+        return self
+
+    def transform(self, X):
+        """
+        Extracts features from the raw data and projects them into the LPP manifold.
+        X shape: (n_epochs, n_channels, n_times)
+        Returns shape: (n_epochs, numberOfComponents)
+        """
+        if self.projection_matrix_ is None:
+            raise ValueError("The LPP instance must be fitted before calling transform.")
+
+        # Automatically transform 3D raw array to 2D log-variance features internally
+        X_feat = self._convert_to_features(X)
+
+        return X_feat @ self.projection_matrix_

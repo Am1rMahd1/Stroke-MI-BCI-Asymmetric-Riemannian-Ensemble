@@ -158,7 +158,7 @@ def CalEvaluateIndex(cm):
 # --- Main Processing Execution Loop ---
 
 if __name__ == "__main__":
-    path = "/media/amirmahdi/NewVolume"
+    path = "/media/amirmahdi/129699CC9699B0A9"
 
     Acc, Left, Right, AllLeft, AllRight = [], [], [], [], []
 

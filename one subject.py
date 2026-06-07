@@ -12,11 +12,15 @@ import torch.optim as optim
 
 from torch.utils.data import DataLoader, TensorDataset
 
-from Nature import EEGTransformer
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 from torch.autograd import Variable
 import copy
+
+from classifiers import SVMClassifier
+from config.config import Config
+from config.model_parameters import SVM_PARAMS
+from extractors import FBCSPExtractor, LPPExtractor
 from splitters import IntraKFoldSplitter, IntraShuffleSplitter
 
 
@@ -176,7 +180,7 @@ class EEGNetClassifier(): # (اگر BaseClassifier دارید، آن را داخ
         self.b2 = 0.999
 
         # Instantiate Model
-        self.model = EEGTransformer(num_classes=nb_classes, num_channels=chans).to(self.device)
+        self.model = EEGNetClassifier(nb_classes=nb_classes, chans=chans).to(self.device)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
         # To track the best model
@@ -401,8 +405,8 @@ torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-subject_id = "50"
-edf_file = f"/media/amirmahdi/NewVolume/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
+subject_id = "02"
+edf_file = f"/media/amirmahdi/129699CC9699B0A9/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
 raw = mne.io.read_raw_edf(edf_file, preload=True, eog=['HEOL', 'HEOR'], stim_channel=[''], verbose=False)
 raw.rename_channels({'HEOL' : 'EOG1', 'HEOR' : 'EOG2'}, verbose=False)
 raw.set_channel_types({'EOG1' : 'eog', 'EOG2' : 'eog'}, verbose=False)
@@ -437,7 +441,7 @@ raw.filter(
 )
 raw.resample(500, verbose=False)
 montage = mne.channels.make_standard_montage(
-    kind='standard_1020'
+    kind='standard_1005'
 )
 raw.set_montage(montage, match_case=False, on_missing='ignore', verbose=False)
 events_df = pd.read_csv("data/task-motor-imagery_events.csv")
@@ -463,15 +467,14 @@ epochs = mne.Epochs(
     raw,
     events,
     event_id=event_id,
-    tmin=0.0,
-    tmax=4.0,
-    baseline=None,
+    tmin=-1.5,        # Start 1.5 seconds BEFORE the motor imagery video starts (during value==1)
+    tmax=4.0,         # Run until the end of the 4-second motor imagery video
+    baseline=(-1.5, 0), # Use that pre-cue rest period to normalize the signal variance
     preload=True,
     proj=True,
     verbose=False,
 )
 
-# epochs.resample(500, verbose=False)
 y_labels = epochs.events[:, -1]
 mask = np.isin(y_labels, [1, 2])
 x_data = epochs.get_data(copy=False)[mask]
