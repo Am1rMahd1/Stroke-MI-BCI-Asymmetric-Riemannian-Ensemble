@@ -257,7 +257,7 @@ def main():
             y_labels = None
 
             for (l_freq, h_freq) in BANDS:
-                raw_filt = raw_spatial.copy().filter(l_freq=l_freq, h_freq=h_freq, method='fir', verbose=False)
+                raw_filt = raw_spatial.copy().filter(l_freq=l_freq, h_freq=h_freq, method='fir', fir_design='firwin2', verbose=False)
                 raw_filt.set_annotations(annotations, verbose=False)
                 events, event_id = mne.events_from_annotations(raw_filt, event_id={'left_hand': 1, 'right_hand': 2}, verbose=False)
 
