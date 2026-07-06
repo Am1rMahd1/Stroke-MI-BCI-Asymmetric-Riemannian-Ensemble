@@ -12,6 +12,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
 from mne.decoding import CSP
 
+# 🎯 وارد کردن ابزارهای هندسه ریمانی
+from pyriemann.estimation import Covariances
+from pyriemann.tangentspace import TangentSpace
+
 warnings.filterwarnings('ignore')
 mne.set_log_level('ERROR')
 
@@ -26,25 +30,22 @@ def get_smart_channels(location_str, paralysis_side):
     loc = location_str.lower()
     p_side = str(paralysis_side).lower() if not pd.isna(paralysis_side) else ""
 
-    # قانون ۱: سکته‌های ساقه مغز/مخچه -> تمرکز روی هسته مرکزی برای کاهش نویز عضلانی شدید
     if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
         return ['FCz', 'C3', 'Cz', 'C4', 'CPz']
 
     smart_channels = base_channels.copy()
 
-    # قانون ۲: آسیب نیمکره چپ (فلج سمت راست بدن یا لسیون در سمت چپ مغز)
     if 'left' in loc or 'right' in p_side:
         if any(k in loc for k in ['frontal', 'cortex', 'radiata', 'capsule', 'parietal', 'semiovale']):
             smart_channels += ['F3', 'Fz', 'P3', 'Pz']
 
-    # قانون ۳: آسیب نیمکره راست (فلج سمت چپ بدن یا لسیون در سمت راست مغز)
     if 'right' in loc or 'left' in p_side:
         if any(k in loc for k in ['frontal', 'cortex', 'radiata', 'capsule', 'parietal', 'occipital', 'semiovale']):
             smart_channels += ['F4', 'Fz', 'P4', 'Pz']
 
     return list(set(smart_channels))
 
-# [کلاس StandardFBCSP]
+# [کلاس StandardFBCSP بدون تغییر]
 class StandardFBCSP(BaseEstimator, TransformerMixin):
     def __init__(self, n_bands, n_components=4):
         self.n_bands = n_bands
@@ -66,7 +67,36 @@ class StandardFBCSP(BaseEstimator, TransformerMixin):
             X_feat.append(feat_b)
         return np.hstack(X_feat)
 
-# [تابع augment_data]
+# ==========================================================
+# کلاس محاسبات هندسه ریمانی در ساختار فیلتربانک (FBRTS)
+# ==========================================================
+class StandardFBRiemann(BaseEstimator, TransformerMixin):
+    def __init__(self, n_bands):
+        self.n_bands = n_bands
+        self.covs_ = []
+        self.ts_ = []
+
+    def fit(self, X, y):
+        self.covs_ = []
+        self.ts_ = []
+        for b in range(self.n_bands):
+            cov = Covariances(estimator='lwf')
+            ts = TangentSpace(metric='riemann')
+            cov_matrices = cov.fit_transform(X[:, b, :, :])
+            ts.fit(cov_matrices, y)
+            self.covs_.append(cov)
+            self.ts_.append(ts)
+        return self
+
+    def transform(self, X):
+        X_feat = []
+        for b in range(self.n_bands):
+            cov_matrices = self.covs_[b].transform(X[:, b, :, :])
+            feat_b = self.ts_[b].transform(cov_matrices)
+            X_feat.append(feat_b)
+        return np.hstack(X_feat)
+
+# [تابع augment_data بدون تغییر]
 def augment_data(X_train, y_train, method, aug_factor=2, seed=128):
     np.random.seed(seed)
     if method == 'None':
@@ -144,14 +174,12 @@ def set_seeds(seed=128):
 def main():
     set_seeds(128)
 
-    # 1. بارگذاری متادیتای کامل بالینی بیماران
     participants_path = "data/participants.csv"
     if not os.path.exists(participants_path):
         raise FileNotFoundError(f"❌ فایل یافت نشد! مطمئن شوید '{participants_path}' در مسیر اجرای کد است.")
 
     df_part = pd.read_csv(participants_path)
 
-    # مپ کردن هوشمند ستون‌ها بر اساس ساختار جدید متادیتا
     id_col = next((c for c in df_part.columns if 'id' in c.lower() or 'sub' in c.lower()), df_part.columns[0])
     loc_col = next((c for c in df_part.columns if any(k in c.lower() for k in ['location', 'lesion', 'stroke', 'description'])), df_part.columns[7])
     para_col = next((c for c in df_part.columns if 'paralysis' in c.lower() or 'side' in c.lower()), None)
@@ -162,10 +190,12 @@ def main():
     TMIN, TMAX = 0.5, 3.5
 
     subjects = list(range(1, 51))
-    methods = ['None', 'Adaptive_Aug']
 
-    print(f"🚀 Running Clinical-Adaptive Intelligence Framework (LDA Engine)...")
-    print(f"📊 Features mapped successfully from multi-parametric stroke metadata.\n")
+    # تفکیک کامل استراتژی‌ها
+    methods = ['None', 'Adaptive_Riemann_Ensemble']
+
+    print(f"🚀 Running Hybrid Clinical-Adaptive + Asymmetric Riemannian Ensemble Framework...")
+    print(f"📊 FBCSP branch accepts Augmented data | Riemannian branch locked to Pristine data.\n")
 
     master_results = {m: [] for m in methods}
     master_results['Subject'] = []
@@ -174,7 +204,6 @@ def main():
         subject_id = f"{sub_num:02d}"
         sub_str_look = f"sub-{subject_id}"
 
-        # استخراج متغیرهای بالینی سابجکت
         sub_row = df_part[df_part[id_col].astype(str).str.contains(sub_str_look, case=False, na=False)]
 
         if not sub_row.empty:
@@ -189,10 +218,9 @@ def main():
         else:
             stroke_loc, paralysis_side, nihss_val, mbi_val = "Unknown", "Unknown", 3.0, 75.0
 
-        # انتخاب کانال بر اساس پاتولوژی مغزی و سمت فلج کورتیکال
         chosen_channels = get_smart_channels(stroke_loc, paralysis_side)
 
-        print(f"⚡ {sub_str_look} | Location: {stroke_loc:<40} | Side: {paralysis_side:<5} | NIHSS: {nihss_val:<2} | MBI: {mbi_val:<3}")
+        print(f"⚡ {sub_str_look} | Location: {stroke_loc:<40} | Side: {paralysis_side:<5}")
         print(f"   ↳ 🎯 Routed Channels ({len(chosen_channels)}): {chosen_channels}")
 
         sub_dict = {m: np.nan for m in methods}
@@ -249,50 +277,65 @@ def main():
                 try:
                     fold_acc = []
 
-                    # 🧠 ماتریس تصمیم‌گیری بالینی هوشمند (Triple-Pathology Clinical Matrix)
-                    if method == 'Adaptive_Aug':
+                    if method == 'Adaptive_Riemann_Ensemble':
                         loc = stroke_loc.lower() if isinstance(stroke_loc, str) else ""
-
-                        # دسته اول: ساقه مغز و مخچه (مهار شدید آرتیفکت عضلانی)
                         if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
                             actual_method = 'None'
                             dyn_aug_factor = 2
-
-                        # دسته دوم: آسیب‌های نزدیک به قشر کورتکس یا مسیرهای حرکتی متراکم
                         elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
-                            actual_method = 'NS' # فقط تزریق نویز برای حفظ یکپارچگی فاز امواج کورتیکال
+                            actual_method = 'NS'
                             dyn_aug_factor = 3 if (nihss_val >= 6 or mbi_val < 60) else 2
-
-                        # دسته سوم: آسیب‌های عمیق ساب‌کورتیکال (بطن‌ها، گانگلیا، تالاموس)
                         else:
-                            actual_method = 'RF+NS' # تزریق نویز + تغییر رندوم فرکانس برای شتاب‌دهی خطی به الگوها
+                            actual_method = 'RF+NS'
                             dyn_aug_factor = 4 if (nihss_val >= 6 or mbi_val < 60) else 2
                     else:
-                        actual_method = method
+                        actual_method = 'None'
                         dyn_aug_factor = 2
 
                     for train_idx, test_idx in cv.split(X_fb, y):
                         X_tr, y_tr = X_fb[train_idx], y[train_idx]
                         X_te, y_te = X_fb[test_idx], y[test_idx]
 
+                        # 🛠️ تولید دیتای افزوده شده فقط برای بازوی FBCSP
                         X_tr_aug, y_tr_aug = augment_data(X_tr, y_tr, method=actual_method, aug_factor=dyn_aug_factor, seed=128)
 
                         current_n_channels = X_tr_aug.shape[2]
                         n_comp = min(4, current_n_channels)
 
-                        pipeline = Pipeline([
+                        # ساخت پایپلاین اول: فرکانسی-فضایی
+                        pipe_fbcsp = Pipeline([
                             ('fbcsp', StandardFBCSP(n_bands=len(BANDS), n_components=n_comp)),
                             ('scaler', StandardScaler()),
                             ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
                         ])
 
-                        pipeline.fit(X_tr_aug, y_tr_aug)
-                        preds = pipeline.predict(X_te)
+                        # ساخت پایپلاین دوم: هندسه ریمانی
+                        pipe_riemann = Pipeline([
+                            ('fbriemann', StandardFBRiemann(n_bands=len(BANDS))),
+                            ('scaler', StandardScaler()),
+                            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+                        ])
+
+                        # 🦾 پیاده‌سازی فیت نامتقارن (Asymmetric Training Engine)
+                        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)  # فیت با دیتای آگمنت‌شده
+                        pipe_riemann.fit(X_tr, y_tr)        # فیت کاملاً بکر با دیتای اورجینال بدون تغییر هندسه کلسن
+
+                        # 🧠 استخراج احتمالات کالیبره شده سافت سافت (Soft-Voting Mechanism)
+                        proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
+                        proba_riemann = pipe_riemann.predict_proba(X_te)
+
+                        # میانگین‌گیری وزن‌دار هندسی و ریاضی احتمالات
+                        mean_proba = (proba_fbcsp + proba_riemann) / 2.0
+
+                        # بازنگاشت اندیس آرگ‌مکس به برچسب‌های واقعی کلاس (۱ یا ۲)
+                        classes = pipe_fbcsp.classes_
+                        preds = classes[np.argmax(mean_proba, axis=1)]
+
                         fold_acc.append(accuracy_score(y_te, preds))
 
                     mean_acc = np.mean(fold_acc)
                     sub_dict[method] = mean_acc
-                    print(f" ➜ Strategy: {method:<15} (Action: {actual_method:<5} | Factor: {dyn_aug_factor}) | Mean Acc = {mean_acc:.2%}")
+                    print(f" ➜ Strategy: {method:<25} | Mean Acc = {mean_acc:.2%}")
 
                 except Exception as method_e:
                     print(f"[ERROR] Strategy {method} failed on sub-{subject_id}: {method_e}")
@@ -310,10 +353,10 @@ def main():
             continue
 
     # ==========================================================
-    # نمایش خروجی نهایی جدول مقایسه
+    # نمایش خروجی نهایی جدول مقایسه تغییریافته
     # ==========================================================
     print("\n==========================================================================")
-    print("📊 FINAL COMPARISON TABLE (Multi-Parametric Clinical Framework)")
+    print("📊 FINAL COMPARISON TABLE (Asymmetric Adaptive Riemann Ensemble)")
     print("==========================================================================")
 
     df_results = pd.DataFrame(master_results)
@@ -328,8 +371,8 @@ def main():
     print(df_results.to_string(index=False))
     print("==========================================================================")
 
-    df_results.to_csv("clinical_parametric_fbcsp_lda_results.csv", index=False)
-    print("✅ Results saved to 'clinical_parametric_fbcsp_lda_results.csv'")
+    df_results.to_csv("asymmetric_riemann_ensemble_results.csv", index=False)
+    print("✅ Results saved to 'asymmetric_riemann_ensemble_results.csv'")
 
 if __name__ == "__main__":
     main()
