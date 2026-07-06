@@ -16,14 +16,15 @@ warnings.filterwarnings('ignore')
 mne.set_log_level('ERROR')
 
 # ==========================================================
-# تابع استراتژی هوشمند انتخاب کانال بر اساس نوع سکته
+# تابع استراتژی هوشمند انتخاب کانال بر اساس آناتومی و سمت فلج بدن
 # ==========================================================
-def get_smart_channels(location_str):
+def get_smart_channels(location_str, paralysis_side):
+    base_channels = ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4']
     if pd.isna(location_str) or not isinstance(location_str, str):
-        return ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4']
+        return base_channels
 
     loc = location_str.lower()
-    base_channels = ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4']
+    p_side = str(paralysis_side).lower() if not pd.isna(paralysis_side) else ""
 
     # قانون ۱: سکته‌های ساقه مغز/مخچه -> تمرکز روی هسته مرکزی برای کاهش نویز عضلانی شدید
     if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
@@ -31,19 +32,15 @@ def get_smart_channels(location_str):
 
     smart_channels = base_channels.copy()
 
-    # قانون ۲: سکته‌های نیمکره چپ
-    if 'left' in loc:
-        if 'frontal' in loc or 'cortex' in loc or 'radiata' in loc:
-            smart_channels += ['F3', 'Fz']
-        if 'parietal' in loc or 'subparietal' in loc:
-            smart_channels += ['P3', 'Pz']
+    # قانون ۲: آسیب نیمکره چپ (فلج سمت راست بدن یا لسیون در سمت چپ مغز)
+    if 'left' in loc or 'right' in p_side:
+        if any(k in loc for k in ['frontal', 'cortex', 'radiata', 'capsule', 'parietal', 'semiovale']):
+            smart_channels += ['F3', 'Fz', 'P3', 'Pz']
 
-    # قانون ۳: سکته‌های نیمکره راست
-    if 'right' in loc:
-        if 'frontal' in loc or 'cortex' in loc or 'radiata' in loc:
-            smart_channels += ['F4', 'Fz']
-        if 'parietal' in loc or 'occipital' in loc:
-            smart_channels += ['P4', 'Pz']
+    # قانون ۳: آسیب نیمکره راست (فلج سمت چپ بدن یا لسیون در سمت راست مغز)
+    if 'right' in loc or 'left' in p_side:
+        if any(k in loc for k in ['frontal', 'cortex', 'radiata', 'capsule', 'parietal', 'occipital', 'semiovale']):
+            smart_channels += ['F4', 'Fz', 'P4', 'Pz']
 
     return list(set(smart_channels))
 
@@ -147,39 +144,28 @@ def set_seeds(seed=128):
 def main():
     set_seeds(128)
 
-    # 1. بارگذاری داینامیک متادیتای سکته بیماران
+    # 1. بارگذاری متادیتای کامل بالینی بیماران
     participants_path = "data/participants.csv"
     if not os.path.exists(participants_path):
         raise FileNotFoundError(f"❌ فایل یافت نشد! مطمئن شوید '{participants_path}' در مسیر اجرای کد است.")
 
     df_part = pd.read_csv(participants_path)
 
-    # پیدا کردن ستون مربوط به محل ضایعه (مقاوم در برابر تغییر نام ستون)
-    loc_col = None
-    for col in df_part.columns:
-        if any(k in col.lower() for k in ['location', 'lesion', 'stroke', 'description']):
-            loc_col = col
-            break
-    if loc_col is None:
-        loc_col = df_part.columns[1]
-
-    # پیدا کردن ستون شناسه سابجکت
-    id_col = df_part.columns[0]
-    for col in df_part.columns:
-        if 'id' in col.lower() or 'sub' in col.lower():
-            id_col = col
-            break
+    # مپ کردن هوشمند ستون‌ها بر اساس ساختار جدید متادیتا
+    id_col = next((c for c in df_part.columns if 'id' in c.lower() or 'sub' in c.lower()), df_part.columns[0])
+    loc_col = next((c for c in df_part.columns if any(k in c.lower() for k in ['location', 'lesion', 'stroke', 'description'])), df_part.columns[7])
+    para_col = next((c for c in df_part.columns if 'paralysis' in c.lower() or 'side' in c.lower()), None)
+    nihss_col = next((c for c in df_part.columns if 'nihss' in c.lower()), None)
+    mbi_col = next((c for c in df_part.columns if 'mbi' in c.lower() or 'barthel' in c.lower()), None)
 
     BANDS = [(2.0, 6.0), (6.0, 10.0), (10.0, 14.0), (14.0, 18.0), (18.0, 24.0), (24.0, 30.0)]
     TMIN, TMAX = 0.5, 3.5
 
     subjects = list(range(1, 51))
-
-    # 🎯 تعریف متدها: دیتای خام در برابر روش تطبیقی جدید مبتنی بر ضایعه بالینی
     methods = ['None', 'Adaptive_Aug']
 
-    print(f"🚀 Running Lesion-Adaptive Channel & Augmentation Benchmark on {len(subjects)} subjects...")
-    print(f"📊 Using metadata column: '{loc_col}' for anatomical routing and adaptive logic.\n")
+    print(f"🚀 Running Clinical-Adaptive Intelligence Framework (LDA Engine)...")
+    print(f"📊 Features mapped successfully from multi-parametric stroke metadata.\n")
 
     master_results = {m: [] for m in methods}
     master_results['Subject'] = []
@@ -188,17 +174,26 @@ def main():
         subject_id = f"{sub_num:02d}"
         sub_str_look = f"sub-{subject_id}"
 
-        # استخراج هوشمند و پویا محل سکته برای سابجکت فعلی
+        # استخراج متغیرهای بالینی سابجکت
         sub_row = df_part[df_part[id_col].astype(str).str.contains(sub_str_look, case=False, na=False)]
+
         if not sub_row.empty:
             stroke_loc = sub_row[loc_col].values[0]
+            paralysis_side = sub_row[para_col].values[0] if para_col else "Unknown"
+
+            try: nihss_val = float(sub_row[nihss_col].values[0]) if nihss_col and not pd.isna(sub_row[nihss_col].values[0]) else 3.0
+            except: nihss_val = 3.0
+
+            try: mbi_val = float(sub_row[mbi_col].values[0]) if mbi_col and not pd.isna(sub_row[mbi_col].values[0]) else 75.0
+            except: mbi_val = 75.0
         else:
-            stroke_loc = df_part.iloc[sub_num - 1][loc_col] if sub_num - 1 < len(df_part) else "Unknown"
+            stroke_loc, paralysis_side, nihss_val, mbi_val = "Unknown", "Unknown", 3.0, 75.0
 
-        chosen_channels = get_smart_channels(stroke_loc)
+        # انتخاب کانال بر اساس پاتولوژی مغزی و سمت فلج کورتیکال
+        chosen_channels = get_smart_channels(stroke_loc, paralysis_side)
 
-        print(f"⚡ {sub_str_look} | Lesion: {stroke_loc}")
-        print(f"   ↳ 🎯 Channels ({len(chosen_channels)}): {chosen_channels}")
+        print(f"⚡ {sub_str_look} | Location: {stroke_loc:<40} | Side: {paralysis_side:<5} | NIHSS: {nihss_val:<2} | MBI: {mbi_val:<3}")
+        print(f"   ↳ 🎯 Routed Channels ({len(chosen_channels)}): {chosen_channels}")
 
         sub_dict = {m: np.nan for m in methods}
 
@@ -213,8 +208,6 @@ def main():
             raw_base = mne.io.read_raw_edf(edf_file, preload=True, eog=['HEOL', 'HEOR'], verbose=False)
             raw_base.rename_channels({'HEOL' : 'EOG1', 'HEOR' : 'EOG2'}, verbose=False)
             raw_base.set_channel_types({'EOG1' : 'eog', 'EOG2' : 'eog'}, verbose=False)
-
-            # فیلتر کانال‌های انتخاب شده بر اساس آناتومی
             raw_base.pick(chosen_channels, verbose=False)
 
             try:
@@ -256,21 +249,33 @@ def main():
                 try:
                     fold_acc = []
 
-                    # 🧠 پیاده‌سازی منطق تطبیقی: سوئیچ هوشمند متد بر اساس پاتولوژی ضایعه
+                    # 🧠 ماتریس تصمیم‌گیری بالینی هوشمند (Triple-Pathology Clinical Matrix)
                     if method == 'Adaptive_Aug':
                         loc = stroke_loc.lower() if isinstance(stroke_loc, str) else ""
+
+                        # دسته اول: ساقه مغز و مخچه (مهار شدید آرتیفکت عضلانی)
                         if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
-                            actual_method = 'None'    # مهار آرتیفکت عضلانی ساقه مغز با حذف آگمنتیشن مخرب
+                            actual_method = 'None'
+                            dyn_aug_factor = 2
+
+                        # دسته دوم: آسیب‌های نزدیک به قشر کورتکس یا مسیرهای حرکتی متراکم
+                        elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
+                            actual_method = 'NS' # فقط تزریق نویز برای حفظ یکپارچگی فاز امواج کورتیکال
+                            dyn_aug_factor = 3 if (nihss_val >= 6 or mbi_val < 60) else 2
+
+                        # دسته سوم: آسیب‌های عمیق ساب‌کورتیکال (بطن‌ها، گانگلیا، تالاموس)
                         else:
-                            actual_method = 'RF+NS'   # تزریق کاتالیزور فرکانسی+نویز برای شتاب‌دهی به نواحی ساب‌کورتیکال
+                            actual_method = 'RF+NS' # تزریق نویز + تغییر رندوم فرکانس برای شتاب‌دهی خطی به الگوها
+                            dyn_aug_factor = 4 if (nihss_val >= 6 or mbi_val < 60) else 2
                     else:
                         actual_method = method
+                        dyn_aug_factor = 2
 
                     for train_idx, test_idx in cv.split(X_fb, y):
                         X_tr, y_tr = X_fb[train_idx], y[train_idx]
                         X_te, y_te = X_fb[test_idx], y[test_idx]
 
-                        X_tr_aug, y_tr_aug = augment_data(X_tr, y_tr, method=actual_method, aug_factor=2, seed=128)
+                        X_tr_aug, y_tr_aug = augment_data(X_tr, y_tr, method=actual_method, aug_factor=dyn_aug_factor, seed=128)
 
                         current_n_channels = X_tr_aug.shape[2]
                         n_comp = min(4, current_n_channels)
@@ -287,7 +292,7 @@ def main():
 
                     mean_acc = np.mean(fold_acc)
                     sub_dict[method] = mean_acc
-                    print(f" ➜ Strategy: {method:<15} (Action: {actual_method:<5}) | Mean Acc = {mean_acc:.2%}")
+                    print(f" ➜ Strategy: {method:<15} (Action: {actual_method:<5} | Factor: {dyn_aug_factor}) | Mean Acc = {mean_acc:.2%}")
 
                 except Exception as method_e:
                     print(f"[ERROR] Strategy {method} failed on sub-{subject_id}: {method_e}")
@@ -308,7 +313,7 @@ def main():
     # نمایش خروجی نهایی جدول مقایسه
     # ==========================================================
     print("\n==========================================================================")
-    print("📊 FINAL COMPARISON TABLE (Lesion-Adaptive Framework)")
+    print("📊 FINAL COMPARISON TABLE (Multi-Parametric Clinical Framework)")
     print("==========================================================================")
 
     df_results = pd.DataFrame(master_results)
@@ -323,8 +328,8 @@ def main():
     print(df_results.to_string(index=False))
     print("==========================================================================")
 
-    df_results.to_csv("smart_anatomical_fbcsp_lda_results.csv", index=False)
-    print("✅ Results saved to 'smart_anatomical_fbcsp_lda_results.csv'")
+    df_results.to_csv("clinical_parametric_fbcsp_lda_results.csv", index=False)
+    print("✅ Results saved to 'clinical_parametric_fbcsp_lda_results.csv'")
 
 if __name__ == "__main__":
     main()
