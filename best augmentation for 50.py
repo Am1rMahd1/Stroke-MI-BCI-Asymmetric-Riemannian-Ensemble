@@ -12,9 +12,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
 from mne.decoding import CSP
 
-# 🎯 وارد کردن ابزارهای هندسه ریمانی
+# 🎯 ابزارهای هندسه ریمانی و انتخاب ویژگی مبتنی بر اطلاعات متقابل
 from pyriemann.estimation import Covariances
 from pyriemann.tangentspace import TangentSpace
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
 
 warnings.filterwarnings('ignore')
 mne.set_log_level('ERROR')
@@ -45,27 +46,148 @@ def get_smart_channels(location_str, paralysis_side):
 
     return list(set(smart_channels))
 
-# [کلاس StandardFBCSP بدون تغییر]
-class StandardFBCSP(BaseEstimator, TransformerMixin):
-    def __init__(self, n_bands, n_components=4):
+
+# ==========================================================
+# کلاس پیاده‌سازی الگوریتم پیشنهادی مقاله (FBCSP-ASP مبتنی بر PSO)
+# ==========================================================
+class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
+    def __init__(self, n_bands, n_components=4, n_asp_components=2, n_particles=10, max_iter=10, k_features=24):
         self.n_bands = n_bands
         self.n_components = n_components
+        self.n_asp_components = n_asp_components  # تعداد فیلترهای تطبیقی در هر باند فرکانسی
+        self.n_particles = n_particles            # تعداد ذرات در الگوریتم PSO
+        self.max_iter = max_iter                  # تعداد تکرارهای PSO
+        self.k_features = k_features              # تعداد ویژگی‌های نهایی انتخاب‌شده پس از مرحله هرس اطلاعات متقابل
         self.csps_ = []
+        self.asp_filters_ = []
+        self.selector_ = None
+
+    def _optimize_asp_filter(self, covs, y, seed):
+        """ بهینه‌سازی فیلترهای مکانی تطبیقی مبتنی بر بیشینه‌سازی تفاوت انرژی بین کلاس‌ها با PSO """
+        rng = np.random.default_rng(seed)
+        n_trials, n_channels, _ = covs.shape
+        classes = np.unique(y)
+
+        if len(classes) != 2:
+            return rng.standard_normal((n_channels,))
+
+        idx1 = (y == classes[0])
+        idx2 = (y == classes[1])
+
+        # مقداردهی اولیه موقعیت ذرات روی کره واحد فضایی
+        X_p = rng.standard_normal((self.n_particles, n_channels))
+        X_p /= (np.linalg.norm(X_p, axis=1, keepdims=True) + 1e-8)
+
+        V_p = rng.standard_normal((self.n_particles, n_channels)) * 0.1
+
+        pbest = np.copy(X_p)
+        pbest_fit = np.full(self.n_particles, -1e9)
+
+        gbest = np.copy(X_p[0])
+        gbest_fit = -1e9
+
+        # حلقه بهینه‌سازی ذرات
+        for it in range(self.max_iter):
+            for i in range(self.n_particles):
+                w = X_p[i]
+                # محاسبات تمام‌برداری سریع ماتریس انرژی سیگنال فیلتر شده برای تک‌تک تریال‌ها
+                tmp = covs @ w
+                E = np.sum(tmp * w, axis=1)
+                E = np.log(np.maximum(E, 1e-8)) # تبدیل لگاریتمی مرسوم ویژگی‌های انرژی
+
+                m1, m2 = np.mean(E[idx1]), np.mean(E[idx2])
+                v1 = np.var(E[idx1]) + 1e-6
+                v2 = np.var(E[idx2]) + 1e-6
+
+                # تابع برازش (Fitness Function): بیشینه‌سازی فاصله بین‌کلاسی و کمینه‌سازی واریانس درون‌کلاسی
+                fit_val = ((m1 - m2) ** 2) / (v1 + v2)
+
+                if fit_val > pbest_fit[i]:
+                    pbest_fit[i] = fit_val
+                    pbest[i] = np.copy(w)
+
+                if fit_val > gbest_fit:
+                    gbest_fit = fit_val
+                    gbest = np.copy(w)
+
+            # به‌روزرسانی سرعت و موقعیت توده ذرات
+            w_inertia = 0.729
+            c1, c2 = 1.49445, 1.49445
+            r1 = rng.uniform(0, 1, (self.n_particles, n_channels))
+            r2 = rng.uniform(0, 1, (self.n_particles, n_channels))
+
+            V_p = w_inertia * V_p + c1 * r1 * (pbest - X_p) + c2 * r2 * (gbest - X_p)
+            X_p = X_p + V_p
+            X_p /= (np.linalg.norm(X_p, axis=1, keepdims=True) + 1e-8) # نرمال‌سازی مجدد فیلتر
+
+        return gbest
 
     def fit(self, X, y):
         self.csps_ = []
+        self.asp_filters_ = []
+        all_train_features = []
+
         for b in range(self.n_bands):
+            X_band = X[:, b, :, :]
+
+            # ۱. استخراج ویژگی‌های فیلتر مکانی مشترک سنتی (CSP)
             csp = CSP(n_components=self.n_components, reg='ledoit_wolf', log=True, norm_trace=False)
-            csp.fit(X[:, b, :, :], y)
+            csp.fit(X_band, y)
             self.csps_.append(csp)
+            feat_csp = csp.transform(X_band)
+
+            # ۲. استخراج ویژگی‌های فیلتر مکانی تطبیقی (ASP) به کمک PSO
+            covs = np.matmul(X_band, X_band.transpose(0, 2, 1)) / X_band.shape[-1]
+            band_filters = []
+            feat_asp_list = []
+
+            for c_idx in range(self.n_asp_components):
+                # اجرای PSO با دانه‌های تصادفی مختلف جهت دریافت فیلترهای مکمل و متنوع
+                w_best = self._optimize_asp_filter(covs, y, seed=128 + b * 10 + c_idx)
+                band_filters.append(w_best)
+
+                tmp = covs @ w_best
+                E = np.sum(tmp * w_best, axis=1)
+                feat_asp_w = np.log(np.maximum(E, 1e-8)).reshape(-1, 1)
+                feat_asp_list.append(feat_asp_w)
+
+            self.asp_filters_.append(band_filters)
+
+            # ادغام و تلفیق ویژگی‌های هر دو الگو در باند جاری
+            feat_band = np.hstack([feat_csp] + feat_asp_list)
+            all_train_features.append(feat_band)
+
+        X_all_feat = np.hstack(all_train_features)
+
+        # ۳. مرحله دوم: انتخاب برترین ویژگی‌ها بر اساس Mutual Information برای حذف نویز و ابعاد زاید
+        actual_k = min(self.k_features, X_all_feat.shape[1])
+        self.selector_ = SelectKBest(score_func=mutual_info_classif, k=actual_k)
+        self.selector_.fit(X_all_feat, y)
+
         return self
 
     def transform(self, X):
-        X_feat = []
+        all_features = []
         for b in range(self.n_bands):
-            feat_b = self.csps_[b].transform(X[:, b, :, :])
-            X_feat.append(feat_b)
-        return np.hstack(X_feat)
+            X_band = X[:, b, :, :]
+
+            feat_csp = self.csps_[b].transform(X_band)
+
+            covs = np.matmul(X_band, X_band.transpose(0, 2, 1)) / X_band.shape[-1]
+            feat_asp_list = []
+
+            for w_best in self.asp_filters_[b]:
+                tmp = covs @ w_best
+                E = np.sum(tmp * w_best, axis=1)
+                feat_asp_w = np.log(np.maximum(E, 1e-8)).reshape(-1, 1)
+                feat_asp_list.append(feat_asp_w)
+
+            feat_band = np.hstack([feat_csp] + feat_asp_list)
+            all_features.append(feat_band)
+
+        X_all_feat = np.hstack(all_features)
+        return self.selector_.transform(X_all_feat)
+
 
 # ==========================================================
 # کلاس محاسبات هندسه ریمانی در ساختار فیلتربانک (FBRTS)
@@ -95,6 +217,7 @@ class StandardFBRiemann(BaseEstimator, TransformerMixin):
             feat_b = self.ts_[b].transform(cov_matrices)
             X_feat.append(feat_b)
         return np.hstack(X_feat)
+
 
 # [تابع augment_data بدون تغییر]
 def augment_data(X_train, y_train, method, aug_factor=2, seed=128):
@@ -190,12 +313,10 @@ def main():
     TMIN, TMAX = 0.5, 3.5
 
     subjects = list(range(1, 51))
-
-    # تفکیک کامل استراتژی‌ها
     methods = ['None', 'Adaptive_Riemann_Ensemble']
 
     print(f"🚀 Running Hybrid Clinical-Adaptive + Asymmetric Riemannian Ensemble Framework...")
-    print(f"📊 FBCSP branch accepts Augmented data | Riemannian branch locked to Pristine data.\n")
+    print(f"📊 FBCSP-ASP branch accepts Augmented data | Riemannian branch locked to Pristine data.\n")
 
     master_results = {m: [] for m in methods}
     master_results['Subject'] = []
@@ -283,10 +404,10 @@ def main():
                             actual_method = 'None'
                             dyn_aug_factor = 2
                         elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
-                            actual_method = 'NS'
+                            actual_method = 'AVG'
                             dyn_aug_factor = 3 if (nihss_val >= 6 or mbi_val < 60) else 2
                         else:
-                            actual_method = 'RF+NS'
+                            actual_method = 'AVG'
                             dyn_aug_factor = 4 if (nihss_val >= 6 or mbi_val < 60) else 2
                     else:
                         actual_method = 'None'
@@ -296,15 +417,15 @@ def main():
                         X_tr, y_tr = X_fb[train_idx], y[train_idx]
                         X_te, y_te = X_fb[test_idx], y[test_idx]
 
-                        # 🛠️ تولید دیتای افزوده شده فقط برای بازوی FBCSP
+                        # تولید دیتای افزوده شده فقط برای بازوی FBCSP-ASP
                         X_tr_aug, y_tr_aug = augment_data(X_tr, y_tr, method=actual_method, aug_factor=dyn_aug_factor, seed=128)
 
                         current_n_channels = X_tr_aug.shape[2]
                         n_comp = min(4, current_n_channels)
 
-                        # ساخت پایپلاین اول: فرکانسی-فضایی
+                        # 🛠️ بازنشانی پایپلاین اول: استفاده از الگوریتم برتر و تطبیقی مقاله (FBCSP_ASP) به همراه هرس ویژگی
                         pipe_fbcsp = Pipeline([
-                            ('fbcsp', StandardFBCSP(n_bands=len(BANDS), n_components=n_comp)),
+                            ('fbcsp', ImprovedFBCSP_ASP(n_bands=len(BANDS), n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
                             ('scaler', StandardScaler()),
                             ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
                         ])
@@ -316,18 +437,17 @@ def main():
                             ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
                         ])
 
-                        # 🦾 پیاده‌سازی فیت نامتقارن (Asymmetric Training Engine)
+                        # فیت کردن مدل‌ها
                         pipe_fbcsp.fit(X_tr_aug, y_tr_aug)  # فیت با دیتای آگمنت‌شده
-                        pipe_riemann.fit(X_tr, y_tr)        # فیت کاملاً بکر با دیتای اورجینال بدون تغییر هندسه کلسن
+                        pipe_riemann.fit(X_tr, y_tr)        # فیت دیتای اورجینال جهت حفظ ساختار منیفولد ریمانی
 
-                        # 🧠 استخراج احتمالات کالیبره شده سافت سافت (Soft-Voting Mechanism)
+                        # استخراج احتمالات کالیبره شده سافت (Soft-Voting Mechanism)
                         proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
                         proba_riemann = pipe_riemann.predict_proba(X_te)
 
-                        # میانگین‌گیری وزن‌دار هندسی و ریاضی احتمالات
+                        # میانگین‌گیری وزن‌دار احتمالات دو سیستم
                         mean_proba = (proba_fbcsp + proba_riemann) / 2.0
 
-                        # بازنگاشت اندیس آرگ‌مکس به برچسب‌های واقعی کلاس (۱ یا ۲)
                         classes = pipe_fbcsp.classes_
                         preds = classes[np.argmax(mean_proba, axis=1)]
 
@@ -356,7 +476,7 @@ def main():
     # نمایش خروجی نهایی جدول مقایسه تغییریافته
     # ==========================================================
     print("\n==========================================================================")
-    print("📊 FINAL COMPARISON TABLE (Asymmetric Adaptive Riemann Ensemble)")
+    print("📊 FINAL COMPARISON TABLE (Asymmetric Adaptive Riemann Ensemble with FBCSP-ASP)")
     print("==========================================================================")
 
     df_results = pd.DataFrame(master_results)
