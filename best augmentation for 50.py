@@ -6,7 +6,8 @@ import pandas as pd
 import mne
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.metrics import accuracy_score
+# 🎯 اضافه شدن متریک‌های درخواستی به بخش ایمپورت‌ها
+from sklearn.metrics import accuracy_score, cohen_kappa_score, recall_score, precision_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -54,16 +55,15 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
     def __init__(self, n_bands, n_components=4, n_asp_components=2, n_particles=10, max_iter=10, k_features=24):
         self.n_bands = n_bands
         self.n_components = n_components
-        self.n_asp_components = n_asp_components  # تعداد فیلترهای تطبیقی در هر باند فرکانسی
-        self.n_particles = n_particles            # تعداد ذرات در الگوریتم PSO
-        self.max_iter = max_iter                  # تعداد تکرارهای PSO
-        self.k_features = k_features              # تعداد ویژگی‌های نهایی انتخاب‌شده پس از مرحله هرس اطلاعات متقابل
+        self.n_asp_components = n_asp_components
+        self.n_particles = n_particles
+        self.max_iter = max_iter
+        self.k_features = k_features
         self.csps_ = []
         self.asp_filters_ = []
         self.selector_ = None
 
     def _optimize_asp_filter(self, covs, y, seed):
-        """ بهینه‌سازی فیلترهای مکانی تطبیقی مبتنی بر بیشینه‌سازی تفاوت انرژی بین کلاس‌ها با PSO """
         rng = np.random.default_rng(seed)
         n_trials, n_channels, _ = covs.shape
         classes = np.unique(y)
@@ -74,7 +74,6 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
         idx1 = (y == classes[0])
         idx2 = (y == classes[1])
 
-        # مقداردهی اولیه موقعیت ذرات روی کره واحد فضایی
         X_p = rng.standard_normal((self.n_particles, n_channels))
         X_p /= (np.linalg.norm(X_p, axis=1, keepdims=True) + 1e-8)
 
@@ -86,20 +85,17 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
         gbest = np.copy(X_p[0])
         gbest_fit = -1e9
 
-        # حلقه بهینه‌سازی ذرات
         for it in range(self.max_iter):
             for i in range(self.n_particles):
                 w = X_p[i]
-                # محاسبات تمام‌برداری سریع ماتریس انرژی سیگنال فیلتر شده برای تک‌تک تریال‌ها
                 tmp = covs @ w
                 E = np.sum(tmp * w, axis=1)
-                E = np.log(np.maximum(E, 1e-8)) # تبدیل لگاریتمی مرسوم ویژگی‌های انرژی
+                E = np.log(np.maximum(E, 1e-8))
 
                 m1, m2 = np.mean(E[idx1]), np.mean(E[idx2])
                 v1 = np.var(E[idx1]) + 1e-6
                 v2 = np.var(E[idx2]) + 1e-6
 
-                # تابع برازش (Fitness Function): بیشینه‌سازی فاصله بین‌کلاسی و کمینه‌سازی واریانس درون‌کلاسی
                 fit_val = ((m1 - m2) ** 2) / (v1 + v2)
 
                 if fit_val > pbest_fit[i]:
@@ -110,7 +106,6 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
                     gbest_fit = fit_val
                     gbest = np.copy(w)
 
-            # به‌روزرسانی سرعت و موقعیت توده ذرات
             w_inertia = 0.729
             c1, c2 = 1.49445, 1.49445
             r1 = rng.uniform(0, 1, (self.n_particles, n_channels))
@@ -118,7 +113,7 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
 
             V_p = w_inertia * V_p + c1 * r1 * (pbest - X_p) + c2 * r2 * (gbest - X_p)
             X_p = X_p + V_p
-            X_p /= (np.linalg.norm(X_p, axis=1, keepdims=True) + 1e-8) # نرمال‌سازی مجدد فیلتر
+            X_p /= (np.linalg.norm(X_p, axis=1, keepdims=True) + 1e-8)
 
         return gbest
 
@@ -130,19 +125,16 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
         for b in range(self.n_bands):
             X_band = X[:, b, :, :]
 
-            # ۱. استخراج ویژگی‌های فیلتر مکانی مشترک سنتی (CSP)
             csp = CSP(n_components=self.n_components, reg='ledoit_wolf', log=True, norm_trace=False)
             csp.fit(X_band, y)
             self.csps_.append(csp)
             feat_csp = csp.transform(X_band)
 
-            # ۲. استخراج ویژگی‌های فیلتر مکانی تطبیقی (ASP) به کمک PSO
             covs = np.matmul(X_band, X_band.transpose(0, 2, 1)) / X_band.shape[-1]
             band_filters = []
             feat_asp_list = []
 
             for c_idx in range(self.n_asp_components):
-                # اجرای PSO با دانه‌های تصادفی مختلف جهت دریافت فیلترهای مکمل و متنوع
                 w_best = self._optimize_asp_filter(covs, y, seed=128 + b * 10 + c_idx)
                 band_filters.append(w_best)
 
@@ -153,13 +145,11 @@ class ImprovedFBCSP_ASP(BaseEstimator, TransformerMixin):
 
             self.asp_filters_.append(band_filters)
 
-            # ادغام و تلفیق ویژگی‌های هر دو الگو در باند جاری
             feat_band = np.hstack([feat_csp] + feat_asp_list)
             all_train_features.append(feat_band)
 
         X_all_feat = np.hstack(all_train_features)
 
-        # ۳. مرحله دوم: انتخاب برترین ویژگی‌ها بر اساس Mutual Information برای حذف نویز و ابعاد زاید
         actual_k = min(self.k_features, X_all_feat.shape[1])
         self.selector_ = SelectKBest(score_func=mutual_info_classif, k=actual_k)
         self.selector_.fit(X_all_feat, y)
@@ -219,7 +209,6 @@ class StandardFBRiemann(BaseEstimator, TransformerMixin):
         return np.hstack(X_feat)
 
 
-# [تابع augment_data بدون تغییر]
 def augment_data(X_train, y_train, method, aug_factor=2, seed=128):
     np.random.seed(seed)
     if method == 'None':
@@ -314,11 +303,14 @@ def main():
 
     subjects = list(range(1, 51))
     methods = ['None', 'Adaptive_Riemann_Ensemble']
+    metrics_list = ['Acc', 'Kappa', 'Sens', 'Prec']
 
     print(f"🚀 Running Hybrid Clinical-Adaptive + Asymmetric Riemannian Ensemble Framework...")
     print(f"📊 FBCSP-ASP branch accepts Augmented data | Riemannian branch locked to Pristine data.\n")
 
-    master_results = {m: [] for m in methods}
+    # 🛠️ بازطراحی دیکشنری نتایج برای پوشش دادن ستون‌های متریک‌های جدید
+    all_metric_cols = [f"{m}_{met}" for m in methods for met in metrics_list]
+    master_results = {col: [] for col in all_metric_cols}
     master_results['Subject'] = []
 
     for sub_num in subjects:
@@ -344,14 +336,14 @@ def main():
         print(f"⚡ {sub_str_look} | Location: {stroke_loc:<40} | Side: {paralysis_side:<5}")
         print(f"   ↳ 🎯 Routed Channels ({len(chosen_channels)}): {chosen_channels}")
 
-        sub_dict = {m: np.nan for m in methods}
+        sub_dict = {col: np.nan for col in all_metric_cols}
 
         try:
             edf_file = f"/media/amirmahdi/NewVolume/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
             if not os.path.exists(edf_file):
                 print(f"[WARNING] File not found for sub-{subject_id}")
                 master_results['Subject'].append(sub_str_look)
-                for m in methods: master_results[m].append(np.nan)
+                for col in all_metric_cols: master_results[col].append(np.nan)
                 continue
 
             raw_base = mne.io.read_raw_edf(edf_file, preload=True, eog=['HEOL', 'HEOR'], verbose=False)
@@ -396,7 +388,11 @@ def main():
 
             for method in methods:
                 try:
+                    # ایجاد لیست‌های مجزا برای ذخیره هر متریک در فولدها
                     fold_acc = []
+                    fold_kappa = []
+                    fold_sens = []
+                    fold_prec = []
 
                     if method == 'Adaptive_Riemann_Ensemble':
                         loc = stroke_loc.lower() if isinstance(stroke_loc, str) else ""
@@ -405,10 +401,10 @@ def main():
                             dyn_aug_factor = 2
                         elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
                             actual_method = 'AVG+NS'
-                            dyn_aug_factor = 1 if (nihss_val >= 6 or mbi_val < 60) else 1
+                            dyn_aug_factor = 1
                         else:
                             actual_method = 'AVG+NS'
-                            dyn_aug_factor = 1 if (nihss_val >= 6 or mbi_val < 60) else 1
+                            dyn_aug_factor = 1
                     else:
                         actual_method = 'None'
                         dyn_aug_factor = 2
@@ -417,59 +413,67 @@ def main():
                         X_tr, y_tr = X_fb[train_idx], y[train_idx]
                         X_te, y_te = X_fb[test_idx], y[test_idx]
 
-                        # تولید دیتای افزوده شده فقط برای بازوی FBCSP-ASP
                         X_tr_aug, y_tr_aug = augment_data(X_tr, y_tr, method=actual_method, aug_factor=dyn_aug_factor, seed=128)
 
                         current_n_channels = X_tr_aug.shape[2]
                         n_comp = min(4, current_n_channels)
 
-                        # 🛠️ بازنشانی پایپلاین اول: استفاده از الگوریتم برتر و تطبیقی مقاله (FBCSP_ASP) به همراه هرس ویژگی
                         pipe_fbcsp = Pipeline([
                             ('fbcsp', ImprovedFBCSP_ASP(n_bands=len(BANDS), n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
                             ('scaler', StandardScaler()),
                             ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
                         ])
 
-                        # ساخت پایپلاین دوم: هندسه ریمانی
                         pipe_riemann = Pipeline([
                             ('fbriemann', StandardFBRiemann(n_bands=len(BANDS))),
                             ('scaler', StandardScaler()),
                             ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
                         ])
 
-                        # فیت کردن مدل‌ها
-                        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)  # فیت با دیتای آگمنت‌شده
-                        pipe_riemann.fit(X_tr, y_tr)        # فیت دیتای اورجینال جهت حفظ ساختار منیفولد ریمانی
+                        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)
+                        pipe_riemann.fit(X_tr, y_tr)
 
-                        # استخراج احتمالات کالیبره شده سافت (Soft-Voting Mechanism)
                         proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
                         proba_riemann = pipe_riemann.predict_proba(X_te)
 
-                        # میانگین‌گیری وزن‌دار احتمالات دو سیستم
                         mean_proba = (proba_fbcsp + proba_riemann) / 2.0
 
                         classes = pipe_fbcsp.classes_
                         preds = classes[np.argmax(mean_proba, axis=1)]
 
+                        # 🛠️ محاسبه و اضافه کردن بدون تغییر فرآیند پیش‌بینی اصلی
                         fold_acc.append(accuracy_score(y_te, preds))
+                        fold_kappa.append(cohen_kappa_score(y_te, preds))
+                        # برچسب ۱ (left_hand) به عنوان کلاس مثبت پیش‌فرض در نظر گرفته شده است.
+                        fold_sens.append(recall_score(y_te, preds, pos_label=1, zero_division=0))
+                        fold_prec.append(precision_score(y_te, preds, pos_label=1, zero_division=0))
 
                     mean_acc = np.mean(fold_acc)
-                    sub_dict[method] = mean_acc
-                    print(f" ➜ Strategy: {method:<25} | Mean Acc = {mean_acc:.2%}")
+                    mean_kappa = np.mean(fold_kappa)
+                    mean_sens = np.mean(fold_sens)
+                    mean_prec = np.mean(fold_prec)
+
+                    sub_dict[f"{method}_Acc"] = mean_acc
+                    sub_dict[f"{method}_Kappa"] = mean_kappa
+                    sub_dict[f"{method}_Sens"] = mean_sens
+                    sub_dict[f"{method}_Prec"] = mean_prec
+
+                    print(f" ➜ Strategy: {method:<25} | Acc = {mean_acc:.2%} | Kappa = {mean_kappa:.3f} | Sens = {mean_sens:.2%} | Prec = {mean_prec:.2%}")
 
                 except Exception as method_e:
                     print(f"[ERROR] Strategy {method} failed on sub-{subject_id}: {method_e}")
-                    sub_dict[method] = np.nan
+                    for met in metrics_list:
+                        sub_dict[f"{method}_{met}"] = np.nan
 
             master_results['Subject'].append(sub_str_look)
-            for m in methods:
-                master_results[m].append(sub_dict[m])
+            for col in all_metric_cols:
+                master_results[col].append(sub_dict[col])
 
         except Exception as e:
             print(f"[ERROR] General Engine fault on sub-{subject_id}: {e}")
             master_results['Subject'].append(sub_str_look)
-            for m in methods:
-                master_results[m].append(np.nan)
+            for col in all_metric_cols:
+                master_results[col].append(np.nan)
             continue
 
     # ==========================================================
@@ -481,12 +485,16 @@ def main():
 
     df_results = pd.DataFrame(master_results)
 
-    mean_row = {m: df_results[m].mean(skipna=True) for m in methods}
+    mean_row = {col: df_results[col].mean(skipna=True) for col in all_metric_cols}
     mean_row['Subject'] = 'GLOBAL MEAN'
     df_results = pd.concat([df_results, pd.DataFrame([mean_row])], ignore_index=True)
 
-    for m in methods:
-        df_results[m] = df_results[m].apply(lambda x: f"{x:.2%}" if not np.isnan(x) else "NaN")
+    # فرمت‌دهی زیبای ستون‌ها بر اساس نوع متریک
+    for col in all_metric_cols:
+        if 'Kappa' in col:
+            df_results[col] = df_results[col].apply(lambda x: f"{x:.3f}" if not np.isnan(x) else "NaN")
+        else:
+            df_results[col] = df_results[col].apply(lambda x: f"{x:.2%}" if not np.isnan(x) else "NaN")
 
     print(df_results.to_string(index=False))
     print("==========================================================================")
