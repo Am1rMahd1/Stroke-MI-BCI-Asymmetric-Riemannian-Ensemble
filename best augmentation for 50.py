@@ -404,11 +404,11 @@ def main():
                             actual_method = 'None'
                             dyn_aug_factor = 2
                         elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
-                            actual_method = 'AVG'
-                            dyn_aug_factor = 3 if (nihss_val >= 6 or mbi_val < 60) else 2
+                            actual_method = 'AVG+NS'
+                            dyn_aug_factor = 1 if (nihss_val >= 6 or mbi_val < 60) else 1
                         else:
-                            actual_method = 'AVG'
-                            dyn_aug_factor = 4 if (nihss_val >= 6 or mbi_val < 60) else 2
+                            actual_method = 'AVG+NS'
+                            dyn_aug_factor = 1 if (nihss_val >= 6 or mbi_val < 60) else 1
                     else:
                         actual_method = 'None'
                         dyn_aug_factor = 2
