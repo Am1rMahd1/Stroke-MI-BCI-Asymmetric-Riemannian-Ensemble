@@ -310,7 +310,7 @@ def main():
     mbi_col = next((c for c in df_part.columns if 'mbi' in c.lower() or 'barthel' in c.lower()), None)
 
     BANDS = [(2.0, 6.0), (6.0, 10.0), (10.0, 14.0), (14.0, 18.0), (18.0, 24.0), (24.0, 30.0)]
-    TMIN, TMAX = 0.5, 3.5
+    TMIN, TMAX = 0.5, 3.0
 
     subjects = list(range(1, 51))
     methods = ['None', 'Adaptive_Riemann_Ensemble']
