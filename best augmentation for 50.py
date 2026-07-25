@@ -3,7 +3,7 @@ import random
 import warnings
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -20,27 +20,21 @@ from pyriemann.estimation import Covariances
 from pyriemann.tangentspace import TangentSpace
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
 
-# غیرفعال‌سازی هشدارهای غیرضروری
 warnings.filterwarnings('ignore')
 mne.set_log_level('ERROR')
-
 
 # ==========================================================
 # 1. تنظیم جهت‌دهی تصادفی (Seed Management)
 # ==========================================================
 def set_seeds(seed: int = 128) -> None:
-    """تنظیم مقادیر اولیه تصادفی جهت تکرارپذیری دقیق نتایج."""
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
-
 
 # ==========================================================
 # 2. کلاس مدیریت انتخاب کانال مبتنی بر آناتومی
 # ==========================================================
 class ClinicalChannelSelector:
-    """انتخاب هوشمند کانال‌های EEG بر اساس اطلاعات بالینی و موقعیت آسیب."""
-
     BASE_CHANNELS = ['FC3', 'FCz', 'FC4', 'C3', 'Cz', 'C4', 'CP3', 'CPz', 'CP4']
 
     @classmethod
@@ -64,29 +58,21 @@ class ClinicalChannelSelector:
             if any(k in loc for k in ['frontal', 'cortex', 'radiata', 'capsule', 'parietal', 'occipital', 'semiovale']):
                 smart_channels += ['F4', 'Fz', 'P4', 'Pz']
 
-        # 🎯 مرتب‌سازی قطعی (sorted) جهت جلوگیری از به‌هم‌ریختگی ترتیب کانال‌ها در set
         return sorted(list(set(smart_channels)))
 
-
 # ==========================================================
-# 3. ساختار پایه (Super Parent) برای داده‌افزایی (Augmentation)
+# 3. ساختار پایه برای داده‌افزایی (Augmentation)
 # ==========================================================
 class BaseAugmenter(ABC):
-    """Super Parent برای تمامی الگوریتم‌های داده‌افزایی (Augmentation)."""
-
     def __init__(self, aug_factor: int = 2, seed: int = 128):
         self.aug_factor = aug_factor
         self.seed = seed
 
     @abstractmethod
     def augment(self, X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """اعمال تغییرات داده‌افزایی روی سیگنال‌ها."""
         pass
 
-
 class AdaptiveClinicalAugmenter(BaseAugmenter):
-    """پیاده‌سازی استراتژی‌های انطباقی داده‌افزایی بالینی."""
-
     def __init__(self, method_str: str = "Identity", aug_factor: int = 2, seed: int = 128):
         super().__init__(aug_factor=aug_factor, seed=seed)
         self.method_str = method_str
@@ -99,7 +85,7 @@ class AdaptiveClinicalAugmenter(BaseAugmenter):
 
         X_aug, y_aug = [], []
         classes = np.unique(y_train)
-        n_trials, n_bands, n_channels, n_times = X_train.shape
+        _, n_bands, n_channels, n_times = X_train.shape
 
         if 'AVG' in self.method_str:
             for c in classes:
@@ -107,30 +93,6 @@ class AdaptiveClinicalAugmenter(BaseAugmenter):
                 for _ in range(len(idx) * self.aug_factor):
                     i1, i2 = np.random.choice(idx, 2, replace=True)
                     X_aug.append((X_train[i1] + X_train[i2]) / 2.0)
-                    y_aug.append(c)
-
-        if 'RT' in self.method_str:
-            n_slices = 3
-            edges = np.linspace(0, n_times, n_slices + 1, dtype=int)
-            for c in classes:
-                idx = np.where(y_train == c)[0]
-                for _ in range(len(idx) * self.aug_factor):
-                    new_trial = np.zeros((n_bands, n_channels, n_times))
-                    for s in range(n_slices):
-                        t_idx = np.random.choice(idx)
-                        new_trial[:, :, edges[s]:edges[s+1]] = X_train[t_idx, :, :, edges[s]:edges[s+1]]
-                    X_aug.append(new_trial)
-                    y_aug.append(c)
-
-        if 'RF' in self.method_str:
-            for c in classes:
-                idx = np.where(y_train == c)[0]
-                for _ in range(len(idx) * self.aug_factor):
-                    new_trial = np.zeros((n_bands, n_channels, n_times))
-                    for b in range(n_bands):
-                        t_idx = np.random.choice(idx)
-                        new_trial[b, :, :] = X_train[t_idx, b, :, :]
-                    X_aug.append(new_trial)
                     y_aug.append(c)
 
         if 'NS' in self.method_str:
@@ -143,31 +105,16 @@ class AdaptiveClinicalAugmenter(BaseAugmenter):
                         X_aug.append(X_train[i] + noise)
                         y_aug.append(c)
 
-        if 'CPS' in self.method_str:
-            crop_len = int(0.85 * n_times)
-            for c in classes:
-                idx = np.where(y_train == c)[0]
-                for _ in range(self.aug_factor):
-                    for i in idx:
-                        start = np.random.randint(0, n_times - crop_len + 1)
-                        new_trial = np.zeros_like(X_train[i])
-                        new_trial[:, :, start:start+crop_len] = X_train[i, :, :, start:start+crop_len]
-                        X_aug.append(new_trial)
-                        y_aug.append(c)
-
         if len(X_aug) > 0:
             X_train = np.concatenate([X_train, np.array(X_aug)], axis=0)
             y_train = np.concatenate([y_train, np.array(y_aug)], axis=0)
 
         return X_train, y_train
 
-
 # ==========================================================
-# 4. ساختار پایه (Super Parent) برای استخراج ویژگی
+# 4. ماژول‌های استخراج ویژگی (Feature Extractors)
 # ==========================================================
 class BaseFeatureExtractor(BaseEstimator, TransformerMixin, ABC):
-    """Super Parent برای تمام کلاس‌های استخراج ویژگی و تبدیل‌کننده‌های خط لوله."""
-
     @abstractmethod
     def fit(self, X: np.ndarray, y: np.ndarray):
         pass
@@ -176,12 +123,48 @@ class BaseFeatureExtractor(BaseEstimator, TransformerMixin, ABC):
     def transform(self, X: np.ndarray) -> np.ndarray:
         pass
 
+class StandardFBCSP(BaseFeatureExtractor):
+    def __init__(self, n_bands: int, n_components: int = 4, k_features: int = 16):
+        self.n_bands = n_bands
+        self.n_components = n_components
+        self.k_features = k_features
+        self.csps_ = []
+        self.selector_ = None
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        self.csps_ = []
+        all_train_features = []
+
+        for b in range(self.n_bands):
+            X_band = X[:, b, :, :]
+            csp = CSP(n_components=self.n_components, reg='ledoit_wolf', log=True, norm_trace=False)
+            csp.fit(X_band, y)
+            self.csps_.append(csp)
+            feat_csp = csp.transform(X_band)
+            all_train_features.append(feat_csp)
+
+        X_all_feat = np.hstack(all_train_features)
+        actual_k = min(self.k_features, X_all_feat.shape[1])
+
+        mi_func = partial(mutual_info_classif, random_state=128)
+        self.selector_ = SelectKBest(score_func=mi_func, k=actual_k)
+        self.selector_.fit(X_all_feat, y)
+
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        all_features = []
+        for b in range(self.n_bands):
+            X_band = X[:, b, :, :]
+            feat_csp = self.csps_[b].transform(X_band)
+            all_features.append(feat_csp)
+
+        X_all_feat = np.hstack(all_features)
+        return self.selector_.transform(X_all_feat)
 
 class ImprovedFBCSP_ASP(BaseFeatureExtractor):
-    """الگوریتم FBCSP-ASP مبتنی بر بهینه‌سازی ازدحام ذرات (PSO)."""
-
     def __init__(self, n_bands: int, n_components: int = 4, n_asp_components: int = 2,
-                 n_particles: int = 10, max_iter: int = 10, k_features: int = 24):
+                 n_particles: int = 30, max_iter: int = 20, k_features: int = 16):
         self.n_bands = n_bands
         self.n_components = n_components
         self.n_asp_components = n_asp_components
@@ -194,7 +177,7 @@ class ImprovedFBCSP_ASP(BaseFeatureExtractor):
 
     def _optimize_asp_filter(self, covs: np.ndarray, y: np.ndarray, seed: int) -> np.ndarray:
         rng = np.random.default_rng(seed)
-        n_trials, n_channels, _ = covs.shape
+        _, n_channels, _ = covs.shape
         classes = np.unique(y)
 
         if len(classes) != 2:
@@ -214,7 +197,7 @@ class ImprovedFBCSP_ASP(BaseFeatureExtractor):
         gbest = np.copy(X_p[0])
         gbest_fit = -1e9
 
-        for it in range(self.max_iter):
+        for _ in range(self.max_iter):
             for i in range(self.n_particles):
                 w = X_p[i]
                 tmp = covs @ w
@@ -278,10 +261,8 @@ class ImprovedFBCSP_ASP(BaseFeatureExtractor):
             all_train_features.append(feat_band)
 
         X_all_feat = np.hstack(all_train_features)
-
         actual_k = min(self.k_features, X_all_feat.shape[1])
 
-        # 🎯 استفاده از partial برای تثبیت رندوم استیت در mutual_info_classif
         mi_func = partial(mutual_info_classif, random_state=128)
         self.selector_ = SelectKBest(score_func=mi_func, k=actual_k)
         self.selector_.fit(X_all_feat, y)
@@ -310,10 +291,7 @@ class ImprovedFBCSP_ASP(BaseFeatureExtractor):
         X_all_feat = np.hstack(all_features)
         return self.selector_.transform(X_all_feat)
 
-
 class StandardFBRiemann(BaseFeatureExtractor):
-    """محاسبات هندسه ریمانی در ساختار فیلتربانک (FBRTS)."""
-
     def __init__(self, n_bands: int):
         self.n_bands = n_bands
         self.covs_ = []
@@ -339,13 +317,249 @@ class StandardFBRiemann(BaseFeatureExtractor):
             X_feat.append(feat_b)
         return np.hstack(X_feat)
 
-
 # ==========================================================
-# 5. پردازش سیگنال و بارگذاری داده‌های EEG
+# 5. ساختار انتزاعی و پیاده‌سازی حالت‌های Ablation Study (OCP)
+# ==========================================================
+class BaseAblationStrategy(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+    @property
+    @abstractmethod
+    def use_smart_channels(self) -> bool:
+        pass
+
+    @property
+    @abstractmethod
+    def use_augmentation(self) -> bool:
+        pass
+
+    @abstractmethod
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        pass
+
+class Config1_Baseline(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "1_FBCSP (Base Channels, No Aug)"
+    @property
+    def use_smart_channels(self) -> bool: return False
+    @property
+    def use_augmentation(self) -> bool: return False
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr.shape[2])
+        pipe = Pipeline([
+            ('fbcsp', StandardFBCSP(n_bands=n_bands, n_components=n_comp, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+        pipe.fit(X_tr, y_tr)
+        return pipe.predict(X_te)
+
+class Config2_AddChannelSelection(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "2_FBCSP (Smart Channels, No Aug)"
+    @property
+    def use_smart_channels(self) -> bool: return True
+    @property
+    def use_augmentation(self) -> bool: return False
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr.shape[2])
+        pipe = Pipeline([
+            ('fbcsp', StandardFBCSP(n_bands=n_bands, n_components=n_comp, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+        pipe.fit(X_tr, y_tr)
+        return pipe.predict(X_te)
+
+class Config3_AddASP(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "3_FBCSP-ASP (Smart Channels, No Aug)"
+    @property
+    def use_smart_channels(self) -> bool: return True
+    @property
+    def use_augmentation(self) -> bool: return False
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr.shape[2])
+        pipe = Pipeline([
+            ('fbcsp_asp', ImprovedFBCSP_ASP(n_bands=n_bands, n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+        pipe.fit(X_tr, y_tr)
+        return pipe.predict(X_te)
+
+class Config4_AddAugmentation(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "4_FBCSP-ASP (Smart Channels, With Aug)"
+    @property
+    def use_smart_channels(self) -> bool: return True
+    @property
+    def use_augmentation(self) -> bool: return True
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr_aug.shape[2])
+        pipe = Pipeline([
+            ('fbcsp_asp', ImprovedFBCSP_ASP(n_bands=n_bands, n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+        pipe.fit(X_tr_aug, y_tr_aug)
+        return pipe.predict(X_te)
+
+class Config5_RiemannBranch(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "5_FBRiemann (Smart Channels, No Aug)"
+    @property
+    def use_smart_channels(self) -> bool: return True
+    @property
+    def use_augmentation(self) -> bool: return False
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        pipe = Pipeline([
+            ('fbriemann', StandardFBRiemann(n_bands=n_bands)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+        # Note: Riemann branch operates on pristine (non-augmented) data to maximize its robustness trait
+        pipe.fit(X_tr, y_tr)
+        return pipe.predict(X_te)
+
+class Config6_FullEnsemble(BaseAblationStrategy):
+    @property
+    def name(self) -> str: return "6_Ensemble_Full (FBCSP-ASP+Aug & Riemann+NoAug)"
+    @property
+    def use_smart_channels(self) -> bool: return True
+    @property
+    def use_augmentation(self) -> bool: return True
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr_aug.shape[2])
+
+        pipe_fbcsp = Pipeline([
+            ('fbcsp', ImprovedFBCSP_ASP(n_bands=n_bands, n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        pipe_riemann = Pipeline([
+            ('fbriemann', StandardFBRiemann(n_bands=n_bands)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)
+        pipe_riemann.fit(X_tr, y_tr)
+
+        proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
+        proba_riemann = pipe_riemann.predict_proba(X_te)
+
+        mean_proba = (proba_fbcsp + proba_riemann) / 2.0
+        classes = pipe_fbcsp.classes_
+        return classes[np.argmax(mean_proba, axis=1)]
+
+class Config7_FullEnsemble_BaseChannels(BaseAblationStrategy):
+    """The Ultimate Control: Full Ensemble without the Smart Channel routing."""
+    @property
+    def name(self) -> str: return "7_Ensemble_Full (Base Channels, With Aug)"
+
+    @property
+    def use_smart_channels(self) -> bool: return False
+
+    @property
+    def use_augmentation(self) -> bool: return True
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr_aug.shape[2])
+
+        pipe_fbcsp = Pipeline([
+            ('fbcsp', ImprovedFBCSP_ASP(n_bands=n_bands, n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        pipe_riemann = Pipeline([
+            ('fbriemann', StandardFBRiemann(n_bands=n_bands)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)
+        pipe_riemann.fit(X_tr, y_tr)
+
+        proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
+        proba_riemann = pipe_riemann.predict_proba(X_te)
+
+        mean_proba = (proba_fbcsp + proba_riemann) / 2.0
+        classes = pipe_fbcsp.classes_
+        return classes[np.argmax(mean_proba, axis=1)]
+
+class Config8_SymmetricEnsemble_Aug(BaseAblationStrategy):
+    """
+    The Routing Control: Symmetric Fusion.
+    Both FBCSP-ASP and Riemannian branches receive Augmented data.
+    """
+    @property
+    def name(self) -> str: return "8_Ensemble_Symmetric (Both Branches Augmented)"
+
+    @property
+    def use_smart_channels(self) -> bool: return True
+
+    @property
+    def use_augmentation(self) -> bool: return True
+
+    def fit_predict(self, X_tr: np.ndarray, y_tr: np.ndarray,
+                    X_tr_aug: np.ndarray, y_tr_aug: np.ndarray,
+                    X_te: np.ndarray, n_bands: int) -> np.ndarray:
+        n_comp = min(4, X_tr_aug.shape[2])
+
+        pipe_fbcsp = Pipeline([
+            ('fbcsp', ImprovedFBCSP_ASP(n_bands=n_bands, n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        pipe_riemann = Pipeline([
+            ('fbriemann', StandardFBRiemann(n_bands=n_bands)),
+            ('scaler', StandardScaler()),
+            ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
+        ])
+
+        # THE CRITICAL DIFFERENCE: Both branches now receive the Augmented data
+        pipe_fbcsp.fit(X_tr_aug, y_tr_aug)
+        pipe_riemann.fit(X_tr_aug, y_tr_aug)
+
+        proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
+        proba_riemann = pipe_riemann.predict_proba(X_te)
+
+        mean_proba = (proba_fbcsp + proba_riemann) / 2.0
+        classes = pipe_fbcsp.classes_
+        return classes[np.argmax(mean_proba, axis=1)]
+# ==========================================================
+# 6. پردازش سیگنال و بارگذاری داده‌های EEG
 # ==========================================================
 class EEGDataPreprocessor:
-    """کلاس مسئول بارگذاری فایل‌های EDF و فیلترسازی سیگنال‌ها."""
-
     def __init__(self, bands: List[Tuple[float, float]], tmin: float = 0.5, tmax: float = 3.0):
         self.bands = bands
         self.tmin = tmin
@@ -390,9 +604,8 @@ class EEGDataPreprocessor:
         X_fb = np.stack(fb_epochs, axis=1)
         return X_fb, y_labels
 
-
 # ==========================================================
-# 6. بدنه اصلی برنامه (Main Execution)
+# 7. بدنه اصلی اجرای برنامه (Ablation Evaluation Harness)
 # ==========================================================
 def main():
     set_seeds(128)
@@ -406,20 +619,30 @@ def main():
     id_col = next((c for c in df_part.columns if 'id' in c.lower() or 'sub' in c.lower()), df_part.columns[0])
     loc_col = next((c for c in df_part.columns if any(k in c.lower() for k in ['location', 'lesion', 'stroke', 'description'])), df_part.columns[7])
     para_col = next((c for c in df_part.columns if 'paralysis' in c.lower() or 'side' in c.lower()), None)
-    nihss_col = next((c for c in df_part.columns if 'nihss' in c.lower()), None)
-    mbi_col = next((c for c in df_part.columns if 'mbi' in c.lower() or 'barthel' in c.lower()), None)
 
     BANDS = [(2.0, 4.0), (4.0, 6.0), (6.0, 10.0), (10.0, 14.0), (14.0, 18.0), (18.0, 24.0), (24.0, 30.0)]
     preprocessor = EEGDataPreprocessor(bands=BANDS, tmin=0.5, tmax=3.0)
 
     subjects = list(range(1, 51))
-    METHOD_NAME = 'Adaptive_Riemann_Ensemble'
+
+    ablation_strategies: List[BaseAblationStrategy] = [
+        Config1_Baseline(),
+        Config2_AddChannelSelection(),
+        Config3_AddASP(),
+        Config4_AddAugmentation(),
+        Config5_RiemannBranch(),
+        Config7_FullEnsemble_BaseChannels(), # Novelty Proof 1: Proves Smart Channels work
+        Config8_SymmetricEnsemble_Aug(),     # Novelty Proof 2: Proves Asymmetric Routing works
+        Config6_FullEnsemble()               # Your Final Proposed Model
+    ]
     metrics_list = ['Acc', 'Kappa', 'Sens', 'Prec']
 
-    print(f"🚀 Running Hybrid Clinical-Adaptive + Asymmetric Riemannian Ensemble Framework...")
-    print(f"📊 FBCSP-ASP branch accepts Augmented data | Riemannian branch locked to Pristine data.\n")
+    print(f"🚀 Starting Step-by-Step Ablation Proof Study...")
+    for strat in ablation_strategies:
+        print(f"   • {strat.name}")
+    print()
 
-    all_metric_cols = [f"{METHOD_NAME}_{met}" for met in metrics_list]
+    all_metric_cols = [f"{strat.name}_{met}" for strat in ablation_strategies for met in metrics_list]
     master_results = {col: [] for col in all_metric_cols}
     master_results['Subject'] = []
 
@@ -432,139 +655,126 @@ def main():
         if not sub_row.empty:
             stroke_loc = sub_row[loc_col].values[0]
             paralysis_side = sub_row[para_col].values[0] if para_col else "Unknown"
-
-            try: nihss_val = float(sub_row[nihss_col].values[0]) if nihss_col and not pd.isna(sub_row[nihss_col].values[0]) else 3.0
-            except Exception: nihss_val = 3.0
-
-            try: mbi_val = float(sub_row[mbi_col].values[0]) if mbi_col and not pd.isna(sub_row[mbi_col].values[0]) else 75.0
-            except Exception: mbi_val = 75.0
         else:
-            stroke_loc, paralysis_side, nihss_val, mbi_val = "Unknown", "Unknown", 3.0, 75.0
+            stroke_loc, paralysis_side = "Unknown", "Unknown"
 
-        chosen_channels = ClinicalChannelSelector.get_smart_channels(stroke_loc, paralysis_side)
+        smart_channels = ClinicalChannelSelector.get_smart_channels(stroke_loc, paralysis_side)
+        base_channels = ClinicalChannelSelector.BASE_CHANNELS
 
-        print(f"⚡ {sub_str_look} | Location: {stroke_loc:<40} | Side: {paralysis_side:<5}")
-        print(f"   ↳ 🎯 Routed Channels ({len(chosen_channels)}): {chosen_channels}")
+        print(f"⚡ Processing {sub_str_look} | Location: {str(stroke_loc):<30} | Side: {str(paralysis_side):<5}")
 
-        sub_dict = {col: np.nan for col in all_metric_cols}
-
-        try:
-            edf_file = f"/media/amirmahdi/NewVolume/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
-            if not os.path.exists(edf_file):
-                print(f"[WARNING] File not found for sub-{subject_id}")
-                master_results['Subject'].append(sub_str_look)
-                for col in all_metric_cols: master_results[col].append(np.nan)
-                continue
-
-            X_fb, y = preprocessor.process_edf_file(edf_file, chosen_channels)
-            cv = StratifiedShuffleSplit(n_splits=10, train_size=0.6, random_state=128)
-
-            try:
-                fold_acc, fold_kappa, fold_sens, fold_prec = [], [], [], []
-
-                loc = stroke_loc.lower() if isinstance(stroke_loc, str) else ""
-                if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
-                    actual_method = 'Identity'
-                    dyn_aug_factor = 2
-                elif any(k in loc for k in ['cortex', 'frontal', 'parietal', 'radiata', 'capsule', 'semiovale']):
-                    actual_method = 'AVG+NS'
-                    dyn_aug_factor = 1
-                else:
-                    actual_method = 'AVG+NS'
-                    dyn_aug_factor = 1
-
-                augmenter = AdaptiveClinicalAugmenter(method_str=actual_method, aug_factor=dyn_aug_factor, seed=128)
-
-                for train_idx, test_idx in cv.split(X_fb, y):
-                    X_tr, y_tr = X_fb[train_idx], y[train_idx]
-                    X_te, y_te = X_fb[test_idx], y[test_idx]
-
-                    X_tr_aug, y_tr_aug = augmenter.augment(X_tr, y_tr)
-
-                    current_n_channels = X_tr_aug.shape[2]
-                    n_comp = min(4, current_n_channels)
-
-                    pipe_fbcsp = Pipeline([
-                        ('fbcsp', ImprovedFBCSP_ASP(n_bands=len(BANDS), n_components=n_comp, n_asp_components=2, n_particles=30, max_iter=20, k_features=16)),
-                        ('scaler', StandardScaler()),
-                        ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
-                    ])
-
-                    pipe_riemann = Pipeline([
-                        ('fbriemann', StandardFBRiemann(n_bands=len(BANDS))),
-                        ('scaler', StandardScaler()),
-                        ('lda', LinearDiscriminantAnalysis(solver='lsqr', shrinkage='auto'))
-                    ])
-
-                    pipe_fbcsp.fit(X_tr_aug, y_tr_aug)
-                    pipe_riemann.fit(X_tr, y_tr)
-
-                    proba_fbcsp = pipe_fbcsp.predict_proba(X_te)
-                    proba_riemann = pipe_riemann.predict_proba(X_te)
-
-                    mean_proba = (proba_fbcsp + proba_riemann) / 2.0
-
-                    classes = pipe_fbcsp.classes_
-                    preds = classes[np.argmax(mean_proba, axis=1)]
-
-                    fold_acc.append(accuracy_score(y_te, preds))
-                    fold_kappa.append(cohen_kappa_score(y_te, preds))
-                    fold_sens.append(recall_score(y_te, preds, pos_label=1, zero_division=0))
-                    fold_prec.append(precision_score(y_te, preds, pos_label=1, zero_division=0))
-
-                mean_acc = np.mean(fold_acc)
-                mean_kappa = np.mean(fold_kappa)
-                mean_sens = np.mean(fold_sens)
-                mean_prec = np.mean(fold_prec)
-
-                sub_dict[f"{METHOD_NAME}_Acc"] = mean_acc
-                sub_dict[f"{METHOD_NAME}_Kappa"] = mean_kappa
-                sub_dict[f"{METHOD_NAME}_Sens"] = mean_sens
-                sub_dict[f"{METHOD_NAME}_Prec"] = mean_prec
-
-                print(f" ➜ Strategy: {METHOD_NAME:<25} | Acc = {mean_acc:.2%} | Kappa = {mean_kappa:.3f} | Sens = {mean_sens:.2%} | Prec = {mean_prec:.2%}")
-
-            except Exception as method_e:
-                print(f"[ERROR] Strategy {METHOD_NAME} failed on sub-{subject_id}: {method_e}")
-                for met in metrics_list:
-                    sub_dict[f"{METHOD_NAME}_{met}"] = np.nan
-
-            master_results['Subject'].append(sub_str_look)
-            for col in all_metric_cols:
-                master_results[col].append(sub_dict[col])
-
-        except Exception as e:
-            print(f"[ERROR] General Engine fault on sub-{subject_id}: {e}")
+        edf_file = f"/media/amirmahdi/NewVolume/edffile/sub-{subject_id}/eeg/sub-{subject_id}_task-motor-imagery_eeg.edf"
+        if not os.path.exists(edf_file):
+            print(f"[WARNING] File not found for sub-{subject_id}")
             master_results['Subject'].append(sub_str_look)
             for col in all_metric_cols:
                 master_results[col].append(np.nan)
             continue
 
-    # ==========================================================
-    # نمایش خروجی نهایی جدول
-    # ==========================================================
-    print("\n==========================================================================")
-    print("📊 FINAL RESULTS TABLE (Adaptive Riemann Ensemble with FBCSP-ASP)")
-    print("==========================================================================")
+        try:
+            X_fb_base, y_base = preprocessor.process_edf_file(edf_file, base_channels)
+            X_fb_smart, y_smart = preprocessor.process_edf_file(edf_file, smart_channels)
+
+            cv = StratifiedShuffleSplit(n_splits=10, train_size=0.6, random_state=128)
+            splits = list(cv.split(X_fb_smart, y_smart))
+
+            loc = stroke_loc.lower() if isinstance(stroke_loc, str) else ""
+            if 'pons' in loc or 'medulla' in loc or 'cerebell' in loc:
+                actual_method, dyn_aug_factor = 'Identity', 2
+            else:
+                actual_method, dyn_aug_factor = 'AVG+NS', 1
+
+            augmenter = AdaptiveClinicalAugmenter(method_str=actual_method, aug_factor=dyn_aug_factor, seed=128)
+
+            strat_fold_metrics: Dict[str, Dict[str, List[float]]] = {
+                strat.name: {'Acc': [], 'Kappa': [], 'Sens': [], 'Prec': []} for strat in ablation_strategies
+            }
+
+            for train_idx, test_idx in splits:
+                # ==========================================
+                # 1. Base Channel Data Prep
+                # ==========================================
+                X_tr_base, y_tr_base = X_fb_base[train_idx], y_base[train_idx]
+                X_te_base = X_fb_base[test_idx]
+
+                # NEW: Augment the Base Channel data!
+                X_tr_base_aug, y_tr_base_aug = augmenter.augment(X_tr_base, y_tr_base)
+
+                # ==========================================
+                # 2. Smart Channel Data Prep
+                # ==========================================
+                X_tr_smart, y_tr_smart = X_fb_smart[train_idx], y_smart[train_idx]
+                X_te_smart, y_te = X_fb_smart[test_idx], y_smart[test_idx]
+
+                # Augment the Smart Channel data
+                X_tr_smart_aug, y_tr_smart_aug = augmenter.augment(X_tr_smart, y_tr_smart)
+
+                # ==========================================
+                # 3. Strategy Execution
+                # ==========================================
+                for strat in ablation_strategies:
+                    # Dynamically route the correct data streams based on the strategy
+                    if strat.use_smart_channels:
+                        X_tr_used, y_tr_used = X_tr_smart, y_tr_smart
+                        X_tr_aug_used, y_tr_aug_used = X_tr_smart_aug, y_tr_smart_aug
+                        X_te_used = X_te_smart
+                    else:
+                        X_tr_used, y_tr_used = X_tr_base, y_tr_base
+                        X_tr_aug_used, y_tr_aug_used = X_tr_base_aug, y_tr_base_aug
+                        X_te_used = X_te_base
+
+                    preds = strat.fit_predict(
+                        X_tr=X_tr_used,
+                        y_tr=y_tr_used,
+                        X_tr_aug=X_tr_aug_used,
+                        y_tr_aug=y_tr_aug_used,
+                        X_te=X_te_used,
+                        n_bands=len(BANDS)
+                    )
+
+                    # Save Metrics
+                    strat_fold_metrics[strat.name]['Acc'].append(accuracy_score(y_te, preds))
+                    strat_fold_metrics[strat.name]['Kappa'].append(cohen_kappa_score(y_te, preds))
+                    strat_fold_metrics[strat.name]['Sens'].append(recall_score(y_te, preds, pos_label=1, zero_division=0))
+                    strat_fold_metrics[strat.name]['Prec'].append(precision_score(y_te, preds, pos_label=1, zero_division=0))
+
+            master_results['Subject'].append(sub_str_look)
+            for strat in ablation_strategies:
+                for met in metrics_list:
+                    mean_val = np.mean(strat_fold_metrics[strat.name][met])
+                    master_results[f"{strat.name}_{met}"].append(mean_val)
+
+                acc_m = np.mean(strat_fold_metrics[strat.name]['Acc'])
+                print(f"   ↳ [{strat.name:<40}] Mean Acc: {acc_m:.2%}")
+
+        except Exception as e:
+            print(f"[ERROR] Fault processing sub-{subject_id}: {e}")
+            master_results['Subject'].append(sub_str_look)
+            for col in all_metric_cols:
+                master_results[col].append(np.nan)
 
     df_results = pd.DataFrame(master_results)
+    df_results.to_csv("ablation_study_logical_proof.csv", index=False)
 
-    mean_row = {col: df_results[col].mean(skipna=True) for col in all_metric_cols}
-    mean_row['Subject'] = 'GLOBAL MEAN'
-    df_results = pd.concat([df_results, pd.DataFrame([mean_row])], ignore_index=True)
-
-    for col in all_metric_cols:
-        if 'Kappa' in col:
-            df_results[col] = df_results[col].apply(lambda x: f"{x:.3f}" if not np.isnan(x) else "NaN")
-        else:
-            df_results[col] = df_results[col].apply(lambda x: f"{x:.2%}" if not np.isnan(x) else "NaN")
-
-    print(df_results.to_string(index=False))
+    print("\n==========================================================================")
+    print("📊 ABLATION STUDY GLOBAL SUMMARY")
     print("==========================================================================")
 
-    df_results.to_csv("asymmetric_riemann_ensemble_results.csv", index=False)
-    print("✅ Results saved to 'asymmetric_riemann_ensemble_results.csv'")
+    summary_rows = []
+    for strat in ablation_strategies:
+        row = {
+            "Ablation Mode": strat.name,
+            "Accuracy": f"{df_results[f'{strat.name}_Acc'].mean(skipna=True):.2%}",
+            "Kappa": f"{df_results[f'{strat.name}_Kappa'].mean(skipna=True):.3f}",
+            "Sensitivity": f"{df_results[f'{strat.name}_Sens'].mean(skipna=True):.2%}",
+            "Precision": f"{df_results[f'{strat.name}_Prec'].mean(skipna=True):.2%}"
+        }
+        summary_rows.append(row)
 
+    df_summary = pd.DataFrame(summary_rows)
+    print(df_summary.to_string(index=False))
+    print("==========================================================================")
+    print("✅ Results saved to 'ablation_study_logical_proof.csv'")
 
 if __name__ == "__main__":
     main()
